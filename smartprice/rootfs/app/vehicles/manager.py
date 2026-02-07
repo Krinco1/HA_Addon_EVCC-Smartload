@@ -154,6 +154,8 @@ class VehicleManager:
         provider = self._providers[evcc_name]
         state = self._states.get(evcc_name)
         
+        logger.info(f"[{provider.PROVIDER_NAME}] Fetching data for {evcc_name}...")
+        
         try:
             # Try direct API first
             data = await provider.get_data(force_refresh=force)
@@ -164,15 +166,16 @@ class VehicleManager:
                 state.provider_authenticated = provider._authenticated
                 state.last_error = None
                 state.consecutive_errors = 0
-                logger.debug(f"Got SoC={data.soc}% for {evcc_name} from direct API")
+                logger.info(f"[{provider.PROVIDER_NAME}] ✓ Got SoC={data.soc}% for {evcc_name}")
             else:
+                logger.info(f"[{provider.PROVIDER_NAME}] No data from API, trying evcc fallback...")
                 # Fallback to evcc if connected
                 evcc_data = await self._get_from_evcc(evcc_name)
                 if evcc_data and evcc_data.soc is not None:
                     state.data = evcc_data
                     state.data_source = "evcc"
                     state.evcc_connected = True
-                    logger.debug(f"Got SoC={evcc_data.soc}% for {evcc_name} from evcc")
+                    logger.info(f"[{provider.PROVIDER_NAME}] Got SoC={evcc_data.soc}% for {evcc_name} from evcc")
                 elif state.data:
                     # Keep cached data
                     state.data_source = "cache"
@@ -211,12 +214,14 @@ class VehicleManager:
         Returns:
             Dict of evcc_name -> VehicleState
         """
-        tasks = [
-            self.refresh_vehicle(name, force=force)
-            for name in self._providers.keys()
-        ]
+        logger.info(f"Refreshing {len(self._providers)} vehicle providers...")
         
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for name in self._providers.keys():
+            logger.info(f"  Refreshing {name}...")
+            try:
+                await self.refresh_vehicle(name, force=force)
+            except Exception as e:
+                logger.error(f"  Error refreshing {name}: {e}")
         
         # Update evcc connection status
         await self._update_evcc_status()
@@ -303,23 +308,29 @@ class VehicleManager:
     
     def _poll_loop(self):
         """Background polling loop."""
+        logger.info("Vehicle poll loop started")
+        
         while self._running:
             try:
+                logger.info("Starting vehicle API poll...")
+                
                 # Run async refresh in new event loop
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
                 try:
                     loop.run_until_complete(self.refresh_all())
+                    logger.info("Vehicle poll completed successfully")
+                except Exception as e:
+                    logger.error(f"Error in refresh_all: {e}")
                 finally:
                     loop.close()
                 
-                logger.debug("Vehicle poll completed")
-                
             except Exception as e:
-                logger.error(f"Poll error: {e}")
+                logger.error(f"Poll loop error: {e}")
             
             # Sleep in small increments so we can stop quickly
+            logger.debug(f"Sleeping {self.poll_interval_minutes} minutes until next poll")
             for _ in range(self.poll_interval_minutes * 60):
                 if not self._running:
                     break
