@@ -83,7 +83,7 @@ options:
   # Polling-Intervall für Fahrzeug-APIs (Rate-Limits beachten!)
   vehicle_poll_interval_minutes: 30
   
-  # Provider-Konfigurationen (JSON Array)
+  # Provider-Konfigurationen (JSON String)
   # Beispiel:
   # [
   #   {
@@ -107,7 +107,7 @@ options:
   #     "capacity_kwh": 63
   #   }
   # ]
-  vehicle_providers: []
+  vehicle_providers: ""
 
   # ============================================================
   # API
@@ -154,7 +154,7 @@ schema:
   rl_ready_min_comparisons: int
   
   vehicle_poll_interval_minutes: int
-  vehicle_providers: list
+  vehicle_providers: str?
   
   api_port: int
 
