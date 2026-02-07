@@ -76,65 +76,10 @@ class RenaultProvider(VehicleProvider):
         try:
             logger.info(f"[{self.PROVIDER_NAME}] Authenticating {self.user}...")
             
-            # Create client with aiohttp session
-            async with aiohttp.ClientSession() as session:
-                self._client = RenaultClient(
-                    session=session,
-                    locale=self.locale
-                )
-                
-                # Login
-                await self._client.session.login(self.user, self.password)
-                
-                # Get account
-                person = await self._client.get_person()
-                if not person.accounts:
-                    self._last_error = "No accounts found"
-                    return False
-                
-                # Use first account (usually Kamereon)
-                account_id = None
-                for acc in person.accounts:
-                    if acc.accountType == "MYRENAULT":
-                        account_id = acc.accountId
-                        break
-                
-                if not account_id and person.accounts:
-                    account_id = person.accounts[0].accountId
-                
-                if not account_id:
-                    self._last_error = "No valid account found"
-                    return False
-                
-                self._account = await self._client.get_api_account(account_id)
-                
-                # Get vehicles
-                vehicles = await self._account.get_vehicles()
-                
-                if not vehicles.vehicleLinks:
-                    self._last_error = "No vehicles found"
-                    return False
-                
-                # Find our vehicle
-                if self.vin:
-                    for v in vehicles.vehicleLinks:
-                        if v.vin == self.vin:
-                            self._vehicle = await self._account.get_api_vehicle(v.vin)
-                            break
-                else:
-                    # Take first vehicle
-                    self._vehicle = await self._account.get_api_vehicle(
-                        vehicles.vehicleLinks[0].vin
-                    )
-                
-                if self._vehicle:
-                    logger.info(f"[{self.PROVIDER_NAME}] Authenticated! Vehicle VIN: {self._vehicle.vin}")
-                    # Store session info for reuse (renault-api handles this internally)
-                    self._authenticated = True
-                    return True
-                else:
-                    self._last_error = f"Vehicle with VIN {self.vin} not found"
-                    return False
+            # Store credentials for later use
+            self._authenticated = True
+            logger.info(f"[{self.PROVIDER_NAME}] Credentials stored, will authenticate on first fetch")
+            return True
                     
         except Exception as e:
             self._last_error = f"Auth failed: {e}"
@@ -146,11 +91,9 @@ class RenaultProvider(VehicleProvider):
         if not HAS_RENAULT_API:
             return None
         
-        # We need to re-authenticate for each fetch since we're using async context
-        # In production, you'd want to maintain a persistent session
         try:
-            async with aiohttp.ClientSession() as session:
-                client = RenaultClient(session=session, locale=self.locale)
+            async with aiohttp.ClientSession() as websession:
+                client = RenaultClient(websession=websession, locale=self.locale)
                 await client.session.login(self.user, self.password)
                 
                 person = await client.get_person()
@@ -168,6 +111,10 @@ class RenaultProvider(VehicleProvider):
                 
                 # Find vehicle
                 vehicles = await account.get_vehicles()
+                if not vehicles.vehicleLinks:
+                    self._last_error = "No vehicles found"
+                    return None
+                    
                 vin = self.vin or vehicles.vehicleLinks[0].vin
                 vehicle = await account.get_api_vehicle(vin)
                 
@@ -212,6 +159,8 @@ class RenaultProvider(VehicleProvider):
                 except:
                     pass
                 
+                logger.info(f"[{self.PROVIDER_NAME}] Got SoC={soc}% for {self.evcc_name}")
+                
                 return VehicleData(
                     soc=soc,
                     range_km=range_km,
@@ -221,7 +170,6 @@ class RenaultProvider(VehicleProvider):
                     timestamp=timestamp,
                     raw_data={
                         "vin": vin,
-                        "battery_status": str(battery_status) if battery_status else None
                     }
                 )
                 
