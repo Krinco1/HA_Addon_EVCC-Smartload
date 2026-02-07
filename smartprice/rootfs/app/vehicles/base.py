@@ -23,10 +23,28 @@ class VehicleData:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     raw_data: Dict[str, Any] = field(default_factory=dict)  # Provider-specific extras
     
+    def __post_init__(self):
+        """Ensure timestamp is a datetime object."""
+        if isinstance(self.timestamp, str):
+            try:
+                self.timestamp = datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
+            except:
+                self.timestamp = datetime.now(timezone.utc)
+        if self.timestamp and self.timestamp.tzinfo is None:
+            self.timestamp = self.timestamp.replace(tzinfo=timezone.utc)
+    
     @property
     def age_seconds(self) -> int:
         """How old is this data in seconds."""
-        return int((datetime.now(timezone.utc) - self.timestamp).total_seconds())
+        try:
+            ts = self.timestamp
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return int((datetime.now(timezone.utc) - ts).total_seconds())
+        except:
+            return 0
     
     @property
     def is_stale(self) -> bool:
@@ -34,13 +52,18 @@ class VehicleData:
         return self.age_seconds > 4 * 3600
     
     def to_dict(self) -> dict:
+        ts = self.timestamp
+        if isinstance(ts, str):
+            ts_str = ts
+        else:
+            ts_str = ts.isoformat() if ts else None
         return {
             "soc": self.soc,
             "range_km": self.range_km,
             "is_charging": self.is_charging,
             "is_plugged_in": self.is_plugged_in,
             "odometer_km": self.odometer_km,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": ts_str,
             "age_seconds": self.age_seconds,
             "is_stale": self.is_stale
         }
