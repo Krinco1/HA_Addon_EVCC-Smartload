@@ -1615,7 +1615,18 @@ class VehicleMonitor:
             # Wenn schon frische Daten vom VehicleManager, nicht überschreiben
             if name in self.vehicles:
                 existing = self.vehicles[name]
-                if existing.data_source == "direct_api" and existing.last_update > now - timedelta(minutes=5):
+                # Robuster Timestamp-Vergleich
+                try:
+                    last_upd = existing.last_update
+                    if isinstance(last_upd, str):
+                        last_upd = datetime.fromisoformat(last_upd.replace("Z", "+00:00"))
+                    if last_upd.tzinfo is None:
+                        last_upd = last_upd.replace(tzinfo=timezone.utc)
+                    is_fresh = existing.data_source == "direct_api" and last_upd > now - timedelta(minutes=5)
+                except:
+                    is_fresh = False
+                    
+                if is_fresh:
                     # Nur connected-Status aktualisieren
                     if name in connected_vehicles:
                         existing.connected_to_wallbox = True
