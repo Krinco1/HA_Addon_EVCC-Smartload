@@ -1,10 +1,10 @@
-# EVCC-Smartload v2 - Intelligent Energy Management System
+# EVCC-Smartload v3.0.0 - Intelligent Energy Management System
 
 <div align="center">
 
 **🔋 KI-gestützte Optimierung für Heimspeicher & Elektrofahrzeuge**
 
-[![Version](https://img.shields.io/badge/version-2.6.8-blue.svg)](https://github.com/yourusername/smartprice)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/Krinco1/HA_Addon_EVCC-Smartload)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Addon-blue.svg)](https://www.home-assistant.io/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -15,7 +15,7 @@
 ## 📖 Inhaltsverzeichnis
 
 1. [Überblick](#-überblick)
-2. [Wie funktioniert EVCC-Smartload?](#-wie-funktioniert-smartprice)
+2. [Wie funktioniert EVCC-Smartload?](#-wie-funktioniert-evcc-smartload)
 3. [LP vs RL](#-lp-vs-rl---der-unterschied)
 4. [Features](#-features)
 5. [Installation](#-installation)
@@ -167,7 +167,7 @@ if preis < 25ct AND batterie < 90%:
 ```yaml
 evcc_url: "http://192.168.1.66:7070"
 influxdb_host: "192.168.1.67"
-influxdb_database: "smartprice"
+influxdb_database: "evcc-smartload"
 ```
 
 ### Batterie
@@ -337,7 +337,7 @@ Typisch: €50-150/Monat bei optimalen Bedingungen.
 
 ### Repository
 ```
-smartprice/
+evcc-smartload/
 ├── config.yaml
 ├── Dockerfile
 ├── README.md
@@ -351,7 +351,7 @@ smartprice/
 ### Lokale Entwicklung
 ```bash
 git clone https://github.com/Krinco1/HA_Addon_EVCC-Smartload
-cd smartprice
+cd evcc-smartload
 python3 -m venv venv
 source venv/bin/activate
 python rootfs/app/main.py
