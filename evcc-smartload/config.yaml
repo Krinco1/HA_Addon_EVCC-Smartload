@@ -1,5 +1,5 @@
 name: "EVCC-Smartload - Hybrid Optimizer"
-slug: evcc_smartload
+slug: evcc_smartload_v3
 version: "3.0.2"
 description: "LP Optimizer + Shadow RL + Pro-Device Control + Modulares Vehicle-System"
 url: "https://github.com/Krinco1/HA_Addon_EVCC-Smartload"
