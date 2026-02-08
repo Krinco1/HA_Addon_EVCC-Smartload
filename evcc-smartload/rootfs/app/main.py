@@ -2770,7 +2770,7 @@ class SimpleAPIServer:
     <script>
         let currentVehicleId = '';
         
-        function openManualSocModal(vehicleId, vehicleName, capacity) {
+        function openManualSocModal(vehicleId, vehicleName, capacity) {{
             currentVehicleId = vehicleId;
             document.getElementById('modalVehicleName').textContent = vehicleName;
             document.getElementById('modalCapacity').textContent = capacity.toFixed(0);
@@ -2780,13 +2780,13 @@ class SimpleAPIServer:
             
             const modal = document.getElementById('manualSocModal');
             modal.style.display = 'flex';
-        }
+        }}
         
-        function closeManualSocModal() {
+        function closeManualSocModal() {{
             document.getElementById('manualSocModal').style.display = 'none';
-        }
+        }}
         
-        async function submitManualSoc() {
+        async function submitManualSoc() {{
             const soc = parseInt(document.getElementById('manualSocInput').value);
             const errorDiv = document.getElementById('modalError');
             const successDiv = document.getElementById('modalSuccess');
@@ -2795,52 +2795,52 @@ class SimpleAPIServer:
             successDiv.style.display = 'none';
             
             // Validierung
-            if (isNaN(soc) || soc < 0 || soc > 100) {
+            if (isNaN(soc) || soc < 0 || soc > 100) {{
                 errorDiv.textContent = 'Bitte gib einen Wert zwischen 0 und 100 ein.';
                 errorDiv.style.display = 'block';
                 return;
-            }
+            }}
             
-            try {
-                const response = await fetch('/vehicles/manual-soc', {
+            try {{
+                const response = await fetch('/vehicles/manual-soc', {{
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
                         vehicle: currentVehicleId,
                         soc: soc
-                    })
-                });
+                    }})
+                }});
                 
                 const data = await response.json();
                 
-                if (response.ok) {
-                    successDiv.textContent = `✓ SoC für ${currentVehicleId} auf ${soc}% gesetzt!`;
+                if (response.ok) {{
+                    successDiv.textContent = '✓ SoC für ' + currentVehicleId + ' auf ' + soc + '% gesetzt!';
                     successDiv.style.display = 'block';
                     
                     // Schließe Modal nach 2 Sekunden und reload
-                    setTimeout(() => {
+                    setTimeout(() => {{
                         closeManualSocModal();
                         location.reload();
-                    }, 2000);
-                } else {
+                    }}, 2000);
+                }} else {{
                     errorDiv.textContent = data.error || 'Fehler beim Speichern';
                     errorDiv.style.display = 'block';
-                }
-            } catch (error) {
+                }}
+            }} catch (error) {{
                 errorDiv.textContent = 'Netzwerkfehler: ' + error.message;
                 errorDiv.style.display = 'block';
-            }
-        }
+            }}
+        }}
         
         // ESC-Taste zum Schließen
-        document.addEventListener('keydown', function(e) {
+        document.addEventListener('keydown', function(e) {{
             if (e.key === 'Escape') closeManualSocModal();
-        });
+        }});
         
         // Click außerhalb Modal zum Schließen
-        document.getElementById('manualSocModal').addEventListener('click', function(e) {
+        document.getElementById('manualSocModal').addEventListener('click', function(e) {{
             if (e.target === this) closeManualSocModal();
-        });
+        }});
     </script>
 </body>
 </html>'''
