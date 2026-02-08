@@ -15,6 +15,6 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 COPY rootfs /
 
 # Make run script executable
-RUN chmod a+x /etc/services.d/smartprice/run
+RUN chmod a+x /etc/services.d/evcc-smartload/run
 
 WORKDIR /app
