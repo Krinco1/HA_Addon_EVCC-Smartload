@@ -306,6 +306,9 @@ class WebServer:
             "ev_max_ct": self.cfg.ev_max_price_ct,
             "ev_deadline": f"{self.cfg.ev_charge_deadline_hour}:00",
             "decision_interval_minutes": self.cfg.decision_interval_minutes,
+            "battery_charge_eff": self.cfg.battery_charge_efficiency,
+            "battery_discharge_eff": self.cfg.battery_discharge_efficiency,
+            "bat_to_ev_min_ct": self.cfg.battery_to_ev_min_profit_ct,
         }
 
     def _api_summary(self) -> dict:
@@ -498,7 +501,7 @@ class WebServer:
 </style></head><body><div class="c">
 <h1>📚 EVCC-Smartload v{VERSION} Dokumentation</h1>
 <a href="/docs/readme"><div class="card"><h2>📖 README</h2><p>Installation, Konfiguration, Features, API, FAQ</p></div></a>
-<a href="/docs/changelog"><div class="card"><h2>📝 Changelog v4.3.5</h2><p>Was ist neu? Breaking Changes, neue Features</p></div></a>
+<a href="/docs/changelog"><div class="card"><h2>📝 Changelog v4.3.6</h2><p>Was ist neu? Breaking Changes, neue Features</p></div></a>
 <a href="/docs/api"><div class="card"><h2>🔌 API Referenz</h2><p>Alle Endpunkte mit Beispielen</p></div></a>
 <p style="text-align:center;margin-top:30px;"><a href="/">← Dashboard</a></p>
 </div></body></html>"""
@@ -682,6 +685,60 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
         result["vehicles"][name]["data_age"] = v.get_data_age_string()
         result["vehicles"][name]["is_stale"] = v.is_data_stale()
         result["vehicles"][name]["data_source"] = v.data_source
+
+    # --- Battery-to-EV optimization ---
+    # Calculate if discharging battery to charge EVs is cheaper than grid
+    total_ev_need = sum(
+        max(0, (cfg.ev_target_soc - v.get_effective_soc()) / 100 * v.capacity_kwh)
+        for v in vehicles.values()
+    )
+    bat_available_kwh = max(0, (bat_soc - cfg.battery_min_soc) / 100 * cfg.battery_capacity_kwh)
+    round_trip_eff = cfg.battery_charge_efficiency * cfg.battery_discharge_efficiency
+
+    # Estimate battery stored cost (avg of cheapest prices seen in tariff)
+    if hourly:
+        all_prices_ct = sorted([p * 100 for _, p in hourly])
+        # Assume battery was charged at avg of cheapest 30% of prices
+        cheap_n = max(1, len(all_prices_ct) // 3)
+        avg_charge_price_ct = sum(all_prices_ct[:cheap_n]) / cheap_n
+    else:
+        avg_charge_price_ct = cfg.battery_max_price_ct
+
+    # Effective cost to deliver 1 kWh from battery to EV
+    bat_to_ev_cost_ct = avg_charge_price_ct / round_trip_eff
+    # Current grid price
+    current_price_ct = (last_state.current_price * 100) if last_state else 30.0
+    # Upcoming average price (next 6h)
+    upcoming_prices = [p * 100 for h, p in hourly[:6]] if hourly else [current_price_ct]
+    avg_upcoming_ct = sum(upcoming_prices) / len(upcoming_prices) if upcoming_prices else current_price_ct
+
+    # Is it profitable?
+    savings_vs_grid_ct = current_price_ct - bat_to_ev_cost_ct
+    is_profitable = savings_vs_grid_ct >= cfg.battery_to_ev_min_profit_ct
+    # How much can we usefully discharge?
+    bat_for_ev_kwh = min(bat_available_kwh, total_ev_need) if is_profitable else 0
+
+    result["battery_to_ev"] = {
+        "available_kwh": round(bat_available_kwh, 1),
+        "ev_need_kwh": round(total_ev_need, 1),
+        "usable_kwh": round(bat_for_ev_kwh, 1),
+        "bat_cost_ct": round(bat_to_ev_cost_ct, 1),
+        "grid_price_ct": round(current_price_ct, 1),
+        "avg_upcoming_ct": round(avg_upcoming_ct, 1),
+        "savings_ct_per_kwh": round(savings_vs_grid_ct, 1),
+        "round_trip_efficiency": round(round_trip_eff * 100, 1),
+        "is_profitable": is_profitable,
+        "min_profit_ct": cfg.battery_to_ev_min_profit_ct,
+        "recommendation": (
+            f"🔋→🚗 Batterie-Entladung lohnt sich! Spare ~{savings_vs_grid_ct:.0f}ct/kWh "
+            f"({bat_for_ev_kwh:.0f} kWh verfügbar)"
+            if is_profitable and bat_for_ev_kwh > 1 else
+            f"⚡ Netzstrom günstiger ({current_price_ct:.0f}ct) als Batterie ({bat_to_ev_cost_ct:.0f}ct inkl. Verluste)"
+            if total_ev_need > 1 else
+            "✅ Kein EV-Ladebedarf"
+        ),
+    }
+
     return result
 
 

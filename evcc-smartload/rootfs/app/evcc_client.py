@@ -141,3 +141,72 @@ class EvccClient:
         except Exception as e:
             log("error", f"✗ Exception setting EV limit: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Battery mode control
+    # ------------------------------------------------------------------
+
+    def set_battery_mode(self, mode: str) -> bool:
+        """Set battery mode: 'normal', 'hold', 'charge'."""
+        self._login()
+        try:
+            r = self.sess.post(f"{self.base_url}/api/batterymode/{mode}", timeout=10)
+            if r.status_code == 200:
+                log("info", f"✓ Battery mode set to '{mode}'")
+                return True
+            log("warning", f"✗ Failed to set battery mode: {r.status_code}")
+            return False
+        except Exception as e:
+            log("error", f"✗ Battery mode error: {e}")
+            return False
+
+    def set_battery_discharge_control(self, enabled: bool) -> bool:
+        """Enable/disable battery discharge control."""
+        self._login()
+        try:
+            val = "true" if enabled else "false"
+            r = self.sess.post(f"{self.base_url}/api/batterydischargecontrol/{val}", timeout=10)
+            if r.status_code == 200:
+                log("info", f"✓ Battery discharge control: {val}")
+                return True
+            log("warning", f"✗ Failed to set discharge control: {r.status_code}")
+            return False
+        except Exception as e:
+            log("error", f"✗ Discharge control error: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Loadpoint control
+    # ------------------------------------------------------------------
+
+    def set_loadpoint_mode(self, lp_id: int, mode: str) -> bool:
+        """Set loadpoint charging mode: 'off', 'now', 'minpv', 'pv'."""
+        self._login()
+        try:
+            r = self.sess.post(f"{self.base_url}/api/loadpoints/{lp_id}/mode/{mode}", timeout=10)
+            if r.status_code == 200:
+                log("info", f"✓ Loadpoint {lp_id} mode set to '{mode}'")
+                return True
+            log("warning", f"✗ Failed to set loadpoint mode: {r.status_code}")
+            return False
+        except Exception as e:
+            log("error", f"✗ Loadpoint mode error: {e}")
+            return False
+
+    def set_loadpoint_minsoc(self, lp_id: int, soc: int) -> bool:
+        """Set loadpoint minimum SoC %."""
+        self._login()
+        try:
+            r = self.sess.post(f"{self.base_url}/api/loadpoints/{lp_id}/minsoc/{soc}", timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def set_loadpoint_targetsoc(self, lp_id: int, soc: int) -> bool:
+        """Set loadpoint target SoC %."""
+        self._login()
+        try:
+            r = self.sess.post(f"{self.base_url}/api/loadpoints/{lp_id}/targetsoc/{soc}", timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False

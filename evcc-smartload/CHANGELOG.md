@@ -1,5 +1,48 @@
 # Changelog
 
+## v4.3.6 (2026-02-15)
+
+### 🔋→🚗 Batterie-Entladung für EV + Solar-Linie + KIA-RL-Fix
+
+**KIA fehlt in RL (endgültig gefixt):**
+- Root cause: Fahrzeuge wurden nach `start_polling()` registriert, aber `get_all_vehicles()` war zu dem Zeitpunkt noch leer (2s async delay)
+- Fix: Fahrzeugnamen direkt aus `vehicles.yaml` lesen → sofortige Registrierung, unabhängig vom Polling
+- Zusätzlich: dynamische Nachregistrierung im Main-Loop für Fahrzeuge die erst via evcc erscheinen
+
+**Solar-Prognose: SVG-Linie statt transparentes Overlay:**
+- Gelbe Linie (2.5px) mit Punkten an jedem Datenpunkt
+- Subtile gelbe Füllung unter der Linie
+- Skala-Label ("☀ max 8.2kW") oben rechts
+- Deutlich besser sichtbar als das alte rgba-Overlay
+
+**🔋→🚗 Batterie-Entladung für EV-Laden:**
+- Neue Sektion im Dashboard: zeigt ob Batterie-Entladung ins EV günstiger ist als Netzstrom
+- Berechnung berücksichtigt:
+  - Lade-Effizienz (default 92%) und Entlade-Effizienz (default 92%)
+  - Roundtrip-Effizienz: 92% × 92% = 84.6%
+  - Effektive Batterie-Kosten = Ladepreis / Roundtrip-Effizienz
+  - Vergleich mit aktuellem Netzpreis und Ø der nächsten 6h
+  - Mindest-Vorteil: 3ct/kWh (konfigurierbar)
+- Controller aktiviert automatisch:
+  - `batterymode: normal` (Entladung erlauben)
+  - `batterydischargecontrol: true` (Batterie versorgt Wallbox)
+  - `loadpoint/1/mode: now` (EV sofort laden)
+- Deaktiviert automatisch wenn nicht mehr profitabel
+
+**Neue evcc API-Methoden:**
+- `set_battery_mode(mode)` → normal/hold/charge
+- `set_battery_discharge_control(enabled)` → Entladung an/aus
+- `set_loadpoint_mode(lp_id, mode)` → off/now/minpv/pv
+- `set_loadpoint_minsoc(lp_id, soc)` → Min-SoC setzen
+- `set_loadpoint_targetsoc(lp_id, soc)` → Ziel-SoC setzen
+
+**Neue Konfigurationsparameter:**
+- `battery_charge_efficiency`: 0.92 (AC→DC)
+- `battery_discharge_efficiency`: 0.92 (DC→AC)
+- `battery_to_ev_min_profit_ct`: 3.0 (Mindest-Vorteil in ct/kWh)
+
+---
+
 ## v4.3.5 (2026-02-15)
 
 ### 🔧 RL: Alle Fahrzeuge tracken + Persistence Fix

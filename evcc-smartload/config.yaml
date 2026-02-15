@@ -1,6 +1,6 @@
 name: "EVCC-Smartload - Hybrid Optimizer"
 slug: evcc_smartload
-version: "4.3.5"
+version: "4.3.6"
 description: "Modulare Architektur · LP Optimizer + Shadow RL · Pro-Device Control · Manueller SoC · Live-Dashboard"
 url: "https://github.com/Krinco1/HA_Addon_EVCC-Smartload"
 arch:
@@ -27,6 +27,9 @@ options:
   influxdb_password: "smartload"
   battery_capacity_kwh: 33.1
   battery_max_price_ct: 25.0
+  battery_charge_efficiency: 0.92
+  battery_discharge_efficiency: 0.92
+  battery_to_ev_min_profit_ct: 3.0
   ev_max_price_ct: 30.0
   ev_target_soc: 80
   ev_charge_deadline_hour: 6
@@ -46,6 +49,9 @@ schema:
   influxdb_password: password
   battery_capacity_kwh: float
   battery_max_price_ct: float
+  battery_charge_efficiency: float?
+  battery_discharge_efficiency: float?
+  battery_to_ev_min_profit_ct: float?
   ev_max_price_ct: float
   ev_target_soc: int
   ev_charge_deadline_hour: int

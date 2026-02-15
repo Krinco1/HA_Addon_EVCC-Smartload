@@ -1,5 +1,5 @@
 /**
- * EVCC-Smartload Dashboard v4.3.5
+ * EVCC-Smartload Dashboard v4.3.6
  *
  * Fetches /status, /slots, /vehicles, /strategy, /chart-data, /rl-devices
  * Auto-refreshes every 60 seconds.
@@ -105,24 +105,19 @@ function renderChart(data) {
         var col = priceColor(p.price_ct);
         var cls = p.is_now ? ' now' : '';
         var solarKw = p.solar_kw || 0;
-        var solarH = hasSolar ? Math.max(0, (solarKw / maxSolar) * 120) : 0;
         var title = p.hour + ': ' + p.price_ct.toFixed(1) + 'ct';
-        if (solarKw > 0) title += ' | ☀️ ' + solarKw.toFixed(1) + 'kW';
+        if (solarKw > 0) title += ' | \u2600\uFE0F ' + solarKw.toFixed(1) + 'kW';
 
         html += '<div class="chart-bar' + cls + '" style="height:' + h + 'px;background:' + col + ';" title="' + title + '">';
         html += '<span class="bar-value" style="color:' + col + ';">' + p.price_ct.toFixed(1) + '</span>';
-        // Solar overlay dot/marker
-        if (solarKw > 0.1) {
-            html += '<div style="position:absolute;bottom:0;left:0;right:0;height:' + solarH + 'px;background:rgba(255,221,0,0.25);border-top:2px solid #ffdd00;border-radius:0;pointer-events:none;"></div>';
-        }
         html += '<span class="bar-label">' + p.hour + '</span>';
         html += '</div>';
     }
     $('chartBars').innerHTML = html;
 
-    // Limit lines
+    // Limit lines + solar cleanup
     var wrap = $('chartWrap');
-    var existing = wrap.querySelectorAll('.chart-limit,.pv-indicator,.solar-summary');
+    var existing = wrap.querySelectorAll('.chart-limit,.solar-summary,.solar-overlay');
     for (var j = 0; j < existing.length; j++) existing[j].remove();
 
     function addLimit(val, label, color) {
@@ -138,7 +133,77 @@ function renderChart(data) {
     addLimit(batLimit, '\u{1F50B} ' + batLimit + 'ct', '#00d4ff');
     if (evLimit !== batLimit) addLimit(evLimit, '\u{1F50C} ' + evLimit + 'ct', '#ff88ff');
 
-    // Solar summary line
+    // Solar forecast: SVG line + area overlay
+    if (hasSolar && maxSolar > 0.1) {
+        var bars = $('chartBars');
+        var barEls = bars.querySelectorAll('.chart-bar');
+        if (barEls.length > 0) {
+            var svgNS = 'http://www.w3.org/2000/svg';
+            var svg = document.createElementNS(svgNS, 'svg');
+            svg.setAttribute('class', 'solar-overlay');
+            svg.style.cssText = 'position:absolute;left:0;right:0;bottom:22px;height:120px;pointer-events:none;z-index:5;overflow:visible;';
+
+            var points = [];
+            for (var si = 0; si < prices.length; si++) {
+                var skw = prices[si].solar_kw || 0;
+                var barEl = barEls[si];
+                if (!barEl) continue;
+                var xCenter = barEl.offsetLeft + barEl.offsetWidth / 2;
+                var yVal = 120 - (skw / maxSolar) * 105;
+                points.push({x: xCenter, y: yVal, kw: skw});
+            }
+
+            if (points.length > 1) {
+                // Filled area (subtle)
+                var areaPts = points.map(function(pt){return pt.x+','+pt.y;}).join(' ');
+                areaPts += ' ' + points[points.length-1].x + ',120 ' + points[0].x + ',120';
+                var area = document.createElementNS(svgNS, 'polygon');
+                area.setAttribute('points', areaPts);
+                area.setAttribute('fill', 'rgba(255,221,0,0.10)');
+                svg.appendChild(area);
+
+                // Line (clear yellow)
+                var linePts = points.map(function(pt){return pt.x+','+pt.y;}).join(' ');
+                var line = document.createElementNS(svgNS, 'polyline');
+                line.setAttribute('points', linePts);
+                line.setAttribute('fill', 'none');
+                line.setAttribute('stroke', '#ffdd00');
+                line.setAttribute('stroke-width', '2.5');
+                line.setAttribute('stroke-linejoin', 'round');
+                line.setAttribute('stroke-linecap', 'round');
+                svg.appendChild(line);
+
+                // Dots at each data point
+                for (var di = 0; di < points.length; di++) {
+                    if (points[di].kw > 0.1) {
+                        var dot = document.createElementNS(svgNS, 'circle');
+                        dot.setAttribute('cx', points[di].x);
+                        dot.setAttribute('cy', points[di].y);
+                        dot.setAttribute('r', '3');
+                        dot.setAttribute('fill', '#ffdd00');
+                        dot.setAttribute('stroke', '#1a1a2e');
+                        dot.setAttribute('stroke-width', '1.5');
+                        svg.appendChild(dot);
+                    }
+                }
+
+                // Max kW label
+                var maxLabel = document.createElementNS(svgNS, 'text');
+                maxLabel.setAttribute('x', points[points.length-1].x - 5);
+                maxLabel.setAttribute('y', '12');
+                maxLabel.setAttribute('fill', '#ffdd00');
+                maxLabel.setAttribute('font-size', '10');
+                maxLabel.setAttribute('text-anchor', 'end');
+                maxLabel.setAttribute('font-family', '-apple-system, sans-serif');
+                maxLabel.textContent = '\u2600 max ' + maxSolar.toFixed(1) + 'kW';
+                svg.appendChild(maxLabel);
+            }
+
+            wrap.appendChild(svg);
+        }
+    }
+
+    // Solar summary line below chart
     var pvKw = data.pv_now_kw || 0;
     var summaryEl = document.createElement('div');
     summaryEl.className = 'solar-summary';
@@ -196,6 +261,57 @@ function renderSlots(slots, vehicles) {
         html += renderDevice(slots.vehicles[name], name, vMap[name] || {});
     }
     container.innerHTML = html;
+
+    // Battery-to-EV optimization card
+    renderBatToEv(slots.battery_to_ev);
+}
+
+function renderBatToEv(b2e) {
+    var card = $('batToEvCard');
+    var content = $('batToEvContent');
+    if (!card || !content || !b2e) { if (card) card.style.display = 'none'; return; }
+    if (b2e.ev_need_kwh < 0.5) { card.style.display = 'none'; return; }
+
+    card.style.display = '';
+    var profitable = b2e.is_profitable;
+    var borderColor = profitable ? '#00ff88' : '#555';
+    card.style.borderLeft = '3px solid ' + borderColor;
+
+    var h = '<div style="margin-bottom:10px;font-size:1.05em;">' + b2e.recommendation + '</div>';
+
+    h += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:0.9em;">';
+    h += '<div style="background:#0f3460;padding:8px;border-radius:6px;">';
+    h += '<div style="color:#888;font-size:0.8em;">Batterie verfügbar</div>';
+    h += '<div style="color:#00d4ff;font-size:1.1em;font-weight:bold;">' + b2e.available_kwh + ' kWh</div></div>';
+
+    h += '<div style="background:#0f3460;padding:8px;border-radius:6px;">';
+    h += '<div style="color:#888;font-size:0.8em;">EV-Bedarf</div>';
+    h += '<div style="color:#ff88ff;font-size:1.1em;font-weight:bold;">' + b2e.ev_need_kwh + ' kWh</div></div>';
+
+    h += '<div style="background:#0f3460;padding:8px;border-radius:6px;">';
+    h += '<div style="color:#888;font-size:0.8em;">Batterie-Kosten (inkl. Verluste)</div>';
+    h += '<div style="font-size:1.1em;font-weight:bold;">' + b2e.bat_cost_ct + ' ct/kWh</div>';
+    h += '<div style="color:#888;font-size:0.75em;">Roundtrip: ' + b2e.round_trip_efficiency + '%</div></div>';
+
+    h += '<div style="background:#0f3460;padding:8px;border-radius:6px;">';
+    h += '<div style="color:#888;font-size:0.8em;">Netzpreis aktuell</div>';
+    h += '<div style="font-size:1.1em;font-weight:bold;">' + b2e.grid_price_ct + ' ct/kWh</div>';
+    h += '<div style="color:#888;font-size:0.75em;">Ø nächste 6h: ' + b2e.avg_upcoming_ct + 'ct</div></div>';
+    h += '</div>';
+
+    if (profitable && b2e.usable_kwh > 0.5) {
+        var savingsTotal = (b2e.savings_ct_per_kwh * b2e.usable_kwh).toFixed(0);
+        h += '<div style="margin-top:10px;padding:8px;background:#0a2a0a;border:1px solid #00ff88;border-radius:6px;text-align:center;">';
+        h += '<span style="color:#00ff88;font-weight:bold;">\u2714 Ersparnis: ~' + savingsTotal + ' ct</span>';
+        h += ' <span style="color:#888;font-size:0.85em;">(' + b2e.savings_ct_per_kwh + ' ct/kWh × ' + b2e.usable_kwh + ' kWh)</span>';
+        h += '</div>';
+    } else {
+        h += '<div style="margin-top:10px;padding:8px;background:#1a1a2e;border:1px solid #555;border-radius:6px;text-align:center;color:#888;font-size:0.9em;">';
+        h += 'Mindest-Ersparnis: ' + b2e.min_profit_ct + ' ct/kWh nötig';
+        h += '</div>';
+    }
+
+    content.innerHTML = h;
 }
 
 function renderDevice(dev, deviceId, vehicleInfo) {
@@ -348,6 +464,9 @@ function renderConfig(s) {
         ['Batterie max', (cfg.battery_max_ct || 0) + 'ct'],
         ['EV max', (cfg.ev_max_ct || 0) + 'ct'],
         ['EV Deadline', cfg.ev_deadline || '--'],
+        ['Bat Lade-Eff.', ((cfg.battery_charge_eff || 0.92) * 100).toFixed(0) + '%'],
+        ['Bat Entlade-Eff.', ((cfg.battery_discharge_eff || 0.92) * 100).toFixed(0) + '%'],
+        ['Bat→EV Min-Vorteil', (cfg.bat_to_ev_min_ct || 3) + 'ct'],
     ];
     var h = '';
     for (var i = 0; i < rows.length; i++) h += '<tr><td>' + rows[i][0] + '</td><td>' + rows[i][1] + '</td></tr>';

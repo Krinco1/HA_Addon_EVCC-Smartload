@@ -48,6 +48,11 @@ class Config:
     battery_max_soc: int = 90
     battery_price_corridor_ct: float = 0.8
 
+    # --- Battery efficiency (for battery-to-EV calculation) ---
+    battery_charge_efficiency: float = 0.92   # AC→DC charge efficiency
+    battery_discharge_efficiency: float = 0.92  # DC→AC discharge efficiency
+    battery_to_ev_min_profit_ct: float = 3.0  # Min price difference to justify battery→EV
+
     # --- EV charging ---
     ev_max_price_ct: float = 30.0
     ev_target_soc: int = 80
