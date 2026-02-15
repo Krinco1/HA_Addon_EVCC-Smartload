@@ -235,7 +235,7 @@ class Comparator:
                     "rl_total_cost": self.rl_total_cost,
                     "rl_wins": self.rl_wins,
                     "rl_ready": self.rl_ready,
-                    # Per-device stats (v4.3.7)
+                    # Per-device stats (v4.3.8)
                     "device_comparisons": dict(self.device_comparisons),
                     "device_wins": dict(self.device_wins),
                     "device_costs_lp": dict(self.device_costs_lp),
@@ -270,7 +270,7 @@ class Comparator:
             self.rl_wins = data.get("rl_wins", 0)
             self.rl_ready = data.get("rl_ready", False)
 
-            # Per-device stats (added v4.3.7)
+            # Per-device stats (added v4.3.8)
             for k, v in data.get("device_comparisons", {}).items():
                 self.device_comparisons[k] = v
             for k, v in data.get("device_wins", {}).items():
@@ -301,6 +301,7 @@ class RLDeviceController:
         self.cfg = cfg
         self.db_path = DEVICE_CONTROL_DB_PATH
         self._init_db()
+        self._dedup_case_duplicates()
 
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -318,6 +319,33 @@ class RLDeviceController:
         """)
         conn.commit()
         conn.close()
+
+    def _dedup_case_duplicates(self):
+        """Remove case-duplicate entries (e.g. 'ORA_03' and 'ora_03')."""
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute("SELECT device_name, comparisons FROM device_control").fetchall()
+        conn.close()
+
+        # Group by lowercase name
+        groups: Dict[str, list] = {}
+        for name, comps in rows:
+            key = name.lower()
+            if key not in groups:
+                groups[key] = []
+            groups[key].append((name, comps or 0))
+
+        for key, entries in groups.items():
+            if len(entries) <= 1:
+                continue
+            # Keep the one with most comparisons (or first alphabetically)
+            entries.sort(key=lambda x: (-x[1], x[0]))
+            keep = entries[0][0]
+            for name, _ in entries[1:]:
+                conn = sqlite3.connect(self.db_path)
+                conn.execute("DELETE FROM device_control WHERE device_name = ?", (name,))
+                conn.commit()
+                conn.close()
+                log("info", f"🧹 Removed case-duplicate RL device '{name}' (keeping '{keep}')")
 
     def get_device_mode(self, device_name: str) -> str:
         """Return effective mode ('lp' or 'rl') considering overrides and auto-logic."""
