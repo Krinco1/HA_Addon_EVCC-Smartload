@@ -40,7 +40,7 @@
         .legend-cheap::before { background: #00ff88; }
         .legend-mid::before { background: #ffaa00; }
         .legend-exp::before { background: #ff4444; }
-        .legend-solar::before { background: rgba(255,221,0,0.4); border: 1px solid #ffdd00; }
+        .legend-solar::before { background: transparent; border-bottom: 3px solid #ffdd00; border-radius: 0; height: 6px; position: relative; top: -2px; }
 
         /* Energy balance mini cards */
         .eb-item { background: #0f3460; border-radius: 8px; padding: 12px; text-align: center; }
@@ -199,6 +199,12 @@
         <h3 style="margin-bottom: 12px;">⚡ Energiebilanz</h3>
         <div id="energyBalance" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
         </div>
+    </div>
+
+    <!-- Battery-to-EV optimization -->
+    <div class="device-card" id="batToEvCard" style="display:none;">
+        <h3 style="margin-bottom: 12px;">🔋→🚗 Batterie-Entladung für EV</h3>
+        <div id="batToEvContent"></div>
     </div>
 
     <!-- Devices -->

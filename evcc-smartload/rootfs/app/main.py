@@ -1,5 +1,5 @@
 """
-EVCC-Smartload v4.3.5 – Hybrid LP + Shadow RL Optimizer
+EVCC-Smartload v4.3.6 – Hybrid LP + Shadow RL Optimizer
 
 Entry point. Initialises all components and runs the main decision loop.
 """
@@ -54,8 +54,14 @@ def main():
             # Seed comparator so RL maturity reflects historical data
             comparator.seed_from_bootstrap(bootstrapped)
 
-    # --- Register battery for RL tracking (vehicles registered after first poll) ---
-    rl_devices.get_device_mode("battery")
+    # --- Register ALL known devices for RL tracking ---
+    rl_devices.get_device_mode("battery")  # Always register battery
+    # Pre-register from vehicles.yaml (available immediately, no polling needed)
+    for vp in cfg.vehicle_providers:
+        vname = vp.get("evcc_name") or vp.get("name", "")
+        if vname:
+            rl_devices.get_device_mode(vname)
+            log("info", f"Pre-registered RL device: {vname}")
 
     # --- Start background services ---
     collector.start_background_collection()
@@ -69,7 +75,9 @@ def main():
     last_state: Optional[SystemState] = None
     last_rl_action: Optional[Action] = None
     learning_steps = 0
-    registered_rl_devices: set = {"battery"}
+    registered_rl_devices: set = {"battery"} | {
+        vp.get("evcc_name") or vp.get("name", "") for vp in cfg.vehicle_providers if vp.get("evcc_name") or vp.get("name")
+    }
 
     log("info", "Starting main decision loop...")
 
@@ -122,6 +130,31 @@ def main():
 
             actual_cost = controller.apply(final)
 
+            # Battery-to-EV optimization
+            all_vehicles = vehicle_monitor.get_all_vehicles()
+            any_ev_connected = any(v.connected_to_wallbox for v in all_vehicles.values())
+            if any_ev_connected and tariffs:
+                total_ev_need = sum(
+                    max(0, (cfg.ev_target_soc - v.get_effective_soc()) / 100 * v.capacity_kwh)
+                    for v in all_vehicles.values()
+                )
+                if total_ev_need > 1:
+                    bat_available = max(0, (state.battery_soc - cfg.battery_min_soc) / 100 * cfg.battery_capacity_kwh)
+                    rt_eff = cfg.battery_charge_efficiency * cfg.battery_discharge_efficiency
+                    bat_cost_ct = cfg.battery_max_price_ct / rt_eff
+                    grid_ct = state.current_price * 100
+                    savings = grid_ct - bat_cost_ct
+                    bat_to_ev_info = {
+                        "is_profitable": savings >= cfg.battery_to_ev_min_profit_ct,
+                        "usable_kwh": min(bat_available, total_ev_need),
+                        "savings_ct_per_kwh": savings,
+                    }
+                    controller.apply_battery_to_ev(bat_to_ev_info, any_ev_connected)
+                else:
+                    controller.apply_battery_to_ev({"is_profitable": False}, False)
+            else:
+                controller.apply_battery_to_ev({"is_profitable": False}, False)
+
             # RL learning
             if last_state is not None and last_rl_action is not None:
                 reward = comparator.calculate_reward(last_state, last_rl_action, state, events)
@@ -133,7 +166,6 @@ def main():
 
             # Comparison
             comparator.compare(state, lp_action, rl_action, actual_cost)
-            all_vehicles = vehicle_monitor.get_all_vehicles()
             comparator.compare_per_device(state, lp_action, rl_action, actual_cost,
                                           rl_devices, all_vehicles=all_vehicles)
 
