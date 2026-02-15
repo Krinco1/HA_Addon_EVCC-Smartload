@@ -1,5 +1,22 @@
 # Changelog
 
+## v4.3.8 (2026-02-15)
+
+### 🔧 Batterie→EV Karte + ORA Duplikat-Fix
+
+**Batterie→EV Karte immer sichtbar:**
+- Karte verschwindet nicht mehr wenn kein Ladebedarf besteht
+- Zeigt dann: "Alle Fahrzeuge geladen — kein Entladebedarf" + verfügbare kWh und Netzpreis
+- Vorher: Karte wurde komplett ausgeblendet → User dachte Feature sei kaputt
+
+**ORA_03/ora_03 Duplikat-Fix:**
+- evcc liefert Fahrzeugnamen lowercase (`ora_03`), vehicles.yaml hat Großbuchstaben (`ORA_03`)
+- Case-insensitive Matching in `_merge_evcc_data`: evcc-Daten werden auf den kanonischen Namen gemappt
+- Case-insensitive Dedup bei RL-Device-Registrierung im Main-Loop
+- Startup-Cleanup: `_dedup_case_duplicates()` entfernt bestehende Duplikate aus SQLite
+
+---
+
 ## v4.3.7 (2026-02-15)
 
 ### 🎯 Dynamische Entladegrenze (bufferSoc/prioritySoc via evcc API)

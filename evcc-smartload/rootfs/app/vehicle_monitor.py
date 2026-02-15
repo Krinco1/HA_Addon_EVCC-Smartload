@@ -159,8 +159,14 @@ class VehicleMonitor:
                     "charging": lp.get("charging", False),
                 }
 
+        # Build case-insensitive lookup for existing vehicle names
+        existing_lower = {k.lower(): k for k in self.vehicles}
+
         for name, data in evcc_state.get("vehicles", {}).items():
-            existing = self.vehicles.get(name)
+            # Use existing name if only case differs (e.g. evcc "ora_03" → our "ORA_03")
+            canonical = existing_lower.get(name.lower(), name)
+
+            existing = self.vehicles.get(canonical)
             # Don't overwrite direct_api data
             if existing and existing.data_source == "direct_api" and existing.soc > 0:
                 existing.last_poll = now  # We polled successfully, just kept old data
@@ -175,8 +181,8 @@ class VehicleMonitor:
 
             capacity = data.get("capacity", 0) or _guess_capacity(name, self.cfg.ev_default_energy_kwh)
 
-            self.vehicles[name] = VehicleStatus(
-                name=name,
+            self.vehicles[canonical] = VehicleStatus(
+                name=canonical,
                 soc=soc,
                 capacity_kwh=capacity,
                 range_km=data.get("range", 0),

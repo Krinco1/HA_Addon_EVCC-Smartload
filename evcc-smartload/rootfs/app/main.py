@@ -1,5 +1,5 @@
 """
-EVCC-Smartload v4.3.7 – Hybrid LP + Shadow RL Optimizer
+EVCC-Smartload v4.3.8 – Hybrid LP + Shadow RL Optimizer
 
 Entry point. Initialises all components and runs the main decision loop.
 """
@@ -78,6 +78,8 @@ def main():
     registered_rl_devices: set = {"battery"} | {
         vp.get("evcc_name") or vp.get("name", "") for vp in cfg.vehicle_providers if vp.get("evcc_name") or vp.get("name")
     }
+    # Case-insensitive lookup for dedup (evcc may use different case than vehicles.yaml)
+    registered_rl_lower: set = {n.lower() for n in registered_rl_devices}
 
     log("info", "Starting main decision loop...")
 
@@ -91,9 +93,10 @@ def main():
 
             # Dynamic RL device registration (catches vehicles that appear after startup)
             for vname in vehicle_monitor.get_all_vehicles():
-                if vname not in registered_rl_devices:
+                if vname not in registered_rl_devices and vname.lower() not in registered_rl_lower:
                     rl_devices.get_device_mode(vname)
                     registered_rl_devices.add(vname)
+                    registered_rl_lower.add(vname.lower())
                     log("info", f"Registered RL device: {vname}")
 
             events = event_detector.detect(state)

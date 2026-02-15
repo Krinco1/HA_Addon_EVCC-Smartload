@@ -1,5 +1,5 @@
 /**
- * EVCC-Smartload Dashboard v4.3.7
+ * EVCC-Smartload Dashboard v4.3.8
  *
  * Fetches /status, /slots, /vehicles, /strategy, /chart-data, /rl-devices
  * Auto-refreshes every 60 seconds.
@@ -270,10 +270,26 @@ function renderBatToEv(b2e) {
     var card = $('batToEvCard');
     var content = $('batToEvContent');
     if (!card || !content || !b2e) { if (card) card.style.display = 'none'; return; }
-    if (b2e.ev_need_kwh < 0.5) { card.style.display = 'none'; return; }
 
     card.style.display = '';
     var profitable = b2e.is_profitable;
+
+    // No EV need — show minimal info
+    if (b2e.ev_need_kwh < 0.5) {
+        card.style.borderLeft = '3px solid #555';
+        var h = '<div style="color:#888;font-size:0.95em;">\u2705 Alle Fahrzeuge geladen \u2014 kein Entladebedarf</div>';
+        h += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:0.85em;margin-top:8px;">';
+        h += '<div style="background:#0f3460;padding:8px;border-radius:6px;">';
+        h += '<div style="color:#888;font-size:0.8em;">Batterie verf\u00FCgbar</div>';
+        h += '<div style="color:#00d4ff;">' + b2e.available_kwh + ' kWh</div></div>';
+        h += '<div style="background:#0f3460;padding:8px;border-radius:6px;">';
+        h += '<div style="color:#888;font-size:0.8em;">Netzpreis aktuell</div>';
+        h += '<div>' + b2e.grid_price_ct + ' ct/kWh</div></div>';
+        h += '</div>';
+        content.innerHTML = h;
+        return;
+    }
+
     var borderColor = profitable ? '#00ff88' : '#555';
     card.style.borderLeft = '3px solid ' + borderColor;
 
