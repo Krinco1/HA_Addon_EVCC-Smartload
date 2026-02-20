@@ -1,4 +1,4 @@
-# ⚡ EVCC-Smartload v4.3.9
+# ⚡ EVCC-Smartload v4.3.11
 
 **Intelligentes Energiemanagement für Home Assistant**
 
@@ -14,8 +14,10 @@ Optimiert Hausbatterie und Elektrofahrzeug-Ladung auf Basis dynamischer Strompre
 - **Multi-Fahrzeug-Support** — KIA Connect, Renault/Dacia API, manueller SoC-Input, evcc-Fallback
 - **🔋→🚗 Batterie-Entladung für EV** — Automatische Profitabilitätsberechnung mit Lade-/Entladeverlusten
 - **🎯 Dynamische Entladegrenzen** — bufferSoc/prioritySoc werden automatisch via evcc API angepasst
-- **☀️ Solar-Prognose** — Echte PV-Forecast von evcc als SVG-Linie im Chart
+- **📊 SVG-Preischart** — Responsiver Chart mit Solar-Prognose, Limit-Linien und Hover-Tooltips
+- **🧠 Decision-Log** — Transparentes „Was sehe ich, was plane ich, was mache ich?" im Dashboard
 - **📱 Mobile-First Dashboard** — Responsive Design für Smartphone, Tablet und Desktop
+- **🔌 Wallbox-Erkennung** — Verbindungsstatus und Ladestatus direkt im Dashboard
 - **Persistenter manueller SoC** — Für Fahrzeuge ohne API (z.B. GWM ORA 03)
 - **Modulare Architektur** — Sauber getrennte Module, einfach erweiterbar
 
@@ -119,12 +121,6 @@ vehicles:
 
   # Smartload-spezifisch (kein evcc-Pendant):
   - name: ORA_03
-    template: custom
-    title: GWM ORA 03
-    script: /config/scripts/ora_soc.py
-    capacity: 63
-
-  - name: ORA_03
     template: manual
     title: GWM ORA 03
     capacity: 63
@@ -157,6 +153,7 @@ tariffs:
     ...
 ```
 
+Smartload erkennt automatisch ob evcc die Solar-Werte in Watt oder Kilowatt liefert und konvertiert entsprechend.
 Ohne Solar-Forecast nutzt Smartload eine Schätzung basierend auf aktueller PV-Leistung.
 
 ---
@@ -168,11 +165,22 @@ Das Dashboard ist unter `http://homeassistant:8099` erreichbar und zeigt:
 - **Aktueller Strompreis** mit Farbcodierung (grün < 25ct, orange < 35ct, rot ≥ 35ct)
 - **Batterie-Status** mit SoC-Balken
 - **PV-Leistung** und Hausverbrauch
-- **📊 Strompreis-Chart** mit Solar-Prognose als gelbe SVG-Linie
-- **⚡ Energiebilanz** — PV-Ist, Prognose, Forecast-Quelle
-- **🔋→🚗 Batterie-Entladung** — Profitabilitätsberechnung mit dynamischen Grenzen
+- **📊 SVG-Preischart** — Responsive Darstellung mit:
+  - Preise innerhalb der Balken (schwarze Zahl auf Farbe)
+  - Solar-Prognose als gelbe Fläche mit eigener Y-Achse
+  - Limit-Linien (🔋 Batterie, 🔌 EV) als gestrichelte Linien
+  - „Jetzt"-Markierung mit Glow-Effekt
+  - Hover-Tooltips mit Details
+- **⚡ Energiebilanz** — PV, Hausverbrauch, Netz, Batterie
+- **🔋→🚗 Batterie-Entladung** — Profitabilitätsberechnung mit dynamischen Zonen
 - **Ladeslots** pro Gerät mit Kosten-Kalkulation
+- **🧠 Decision-Log** — Transparente System-Entscheidungen:
+  - 👁️ SEHE: Beobachtungen (Preis, SoC, PV, Wallbox-Status)
+  - 🧠 PLANE: Entscheidungen (Laden erlaubt? Warten?)
+  - ⚡ AKTION: Ausgeführte Befehle an evcc
+  - 🤖 RL: RL-Status und Abweichungen von LP
 - **🤖 RL-Reifegrad** — Fortschritt und Pro-Device Win-Rates
+- **🔌 Wallbox-Status** — Verbunden / Lädt direkt neben Fahrzeug-Name
 - **Manuelle SoC-Eingabe** für Fahrzeuge ohne API
 
 Das Dashboard ist **responsive** (Mobile-First) und aktualisiert sich automatisch alle 60 Sekunden.
@@ -185,6 +193,13 @@ Die Batterie-Entladung zeigt drei farbige Zonen:
 - 🟢 **Grün** (bufferSoc → 100%): Darf fürs EV genutzt werden
 
 Die Grenzen werden dynamisch angepasst basierend auf Solar-Prognose, günstige Netzstunden und EV-Ladebedarf.
+
+### Wallbox-Erkennung
+
+Fahrzeug-Status wird automatisch aus evcc-Loadpoints erkannt (case-insensitive):
+- **⚡ Lädt** — Fahrzeug lädt aktiv an der Wallbox
+- **🔌 Verbunden** — Fahrzeug angeschlossen, aber lädt nicht
+- **Stale-Warnung** wird nur angezeigt wenn Fahrzeug NICHT am Wallbox verbunden ist
 
 ### Zwei Zeitstempel
 
@@ -202,12 +217,13 @@ Basis-URL: `http://homeassistant:8099`
 
 | Endpunkt | Beschreibung |
 |----------|--------------|
-| `/health` | Health-Check (`{"status": "ok", "version": "4.3.9"}`) |
+| `/health` | Health-Check (`{"status": "ok", "version": "4.3.11"}`) |
 | `/status` | Vollständiger System-Status inkl. RL-Metriken |
 | `/vehicles` | Alle Fahrzeuge mit SoC, Datenquelle, manuellem Override |
 | `/slots` | Detaillierte Ladeslots inkl. Batterie→EV Profitabilität |
 | `/chart-data` | Preischart-Daten mit Solar-Prognose (kW pro Stunde) |
 | `/rl-devices` | RL Device Control Status pro Gerät |
+| `/decisions` | System-Entscheidungen (Beobachtungen, Pläne, Aktionen) |
 | `/config` | Aktuelle Konfiguration |
 | `/summary` | Kurzübersicht für schnellen Check |
 | `/comparisons` | Letzte 50 LP/RL-Vergleiche |
@@ -238,21 +254,22 @@ Smartload steuert folgende evcc-Parameter automatisch:
 
 ---
 
-## 🏗️ Architektur (v4.3.9)
+## 🏗️ Architektur (v4.3.11)
 
 ```
 rootfs/app/
-├── main.py              # Startup + Main Loop + Battery→EV Orchestrierung
+├── main.py              # Startup + Main Loop + Battery→EV + Decision Logging
 ├── version.py           # Single source of truth für Version
 ├── config.py            # Konfiguration aus options.json + vehicles.yaml
 ├── logging_util.py      # Zentrales Logging
 ├── evcc_client.py       # evcc REST API Client (Tariffe, Battery, Loadpoint, Buffer)
 ├── influxdb_client.py   # InfluxDB Client
-├── state.py             # SystemState, Action, VehicleStatus, ManualSocStore
+├── state.py             # SystemState, Action, VehicleStatus, ManualSocStore, calc_solar_surplus_kwh
+├── decision_log.py      # 🧠 Decision Log (Beobachtungen, Pläne, Aktionen)
 ├── controller.py        # Aktionen → evcc + dynamische Entladegrenzen
 ├── rl_agent.py          # DQN Agent + Replay Memory
 ├── comparator.py        # LP/RL Vergleich + RL Device Controller (SQLite)
-├── vehicle_monitor.py   # VehicleMonitor + DataCollector
+├── vehicle_monitor.py   # VehicleMonitor + DataCollector (case-insensitive Wallbox-Matching)
 ├── optimizer/
 │   ├── holistic.py      # LP Optimizer
 │   └── event_detector.py
@@ -264,12 +281,12 @@ rootfs/app/
 │   ├── evcc_provider.py
 │   └── custom_provider.py
 └── web/
-    ├── server.py        # HTTP Server + JSON API + Slot-Berechnung
+    ├── server.py        # HTTP Server + JSON API + Slot-Berechnung + /decisions Endpoint
     ├── template_engine.py
     ├── templates/
-    │   └── dashboard.html  # Mobile-First Responsive Dashboard
+    │   └── dashboard.html  # Mobile-First Dashboard mit SVG-Chart + Decision-Log
     └── static/
-        └── app.js       # Dashboard JS: Charts, Solar-Overlay, Battery→EV, RL-Tabelle
+        └── app.js       # Dashboard JS: SVG-Chart, Tooltips, Battery→EV, RL-Tabelle, Decision-Log
 ```
 
 ### Wichtige Design-Prinzipien
@@ -281,6 +298,9 @@ rootfs/app/
 5. **Thread-safe** — ManualSocStore nutzt Locks, alle Module sind thread-safe
 6. **Per-Device Persistenz** — RL-Vergleiche und Win-Rates überleben Neustarts (JSON + SQLite)
 7. **Dynamische evcc-Steuerung** — bufferSoc/prioritySoc werden basierend auf Forecasts gesetzt
+8. **Unit-Autodetection** — Solar-Werte werden automatisch als W oder kW erkannt
+9. **Case-insensitive Matching** — evcc-Fahrzeugnamen werden unabhängig von Groß-/Kleinschreibung zugeordnet
+10. **Transparente Entscheidungen** — Decision-Log macht System-Entscheidungen nachvollziehbar
 
 ---
 
@@ -329,14 +349,20 @@ A: RL läuft im „Shadow Mode" — es beobachtet nur und lernt. Erst bei einer 
 **Q: GWM ORA hat keine API – was tun?**
 A: Nutze den `manual` Provider und gib den SoC über das Dashboard ein. Der Wert wird persistent gespeichert und überlebt Neustarts.
 
-**Q: Warum zeigt das Chart keine Solar-Linie?**
-A: Du brauchst einen Solar-Forecast in deiner evcc-Konfiguration (z.B. `forecast.solar` oder `solcast`). Ohne Forecast nutzt Smartload eine Schätzung und zeigt keine Linie an.
+**Q: Warum zeigt das Chart keine Solar-Prognose?**
+A: Du brauchst einen Solar-Forecast in deiner evcc-Konfiguration (z.B. `forecast.solar` oder `solcast`). Die Werte werden automatisch als W oder kW erkannt.
 
 **Q: Was bedeutet die Batterie→EV Karte?**
 A: Sie zeigt ob es günstiger ist, die Hausbatterie ins EV zu entladen statt Netzstrom zu nutzen. Die Berechnung berücksichtigt Lade-/Entladeverluste und den aktuellen Strompreis.
 
 **Q: Was ist bufferSoc und warum ändert es sich?**
 A: `bufferSoc` ist ein evcc-Parameter der bestimmt, ab welchem SoC die Batterie EV-Laden unterstützen darf. Smartload setzt diesen Wert dynamisch basierend auf Solar-Prognose, günstige Strompreise und EV-Bedarf.
+
+**Q: Warum zeigt mein Fahrzeug "Daten veraltet" obwohl es am Wallbox hängt?**
+A: Das sollte seit v4.3.11 nicht mehr passieren. Fahrzeuge am Wallbox bekommen ihre Daten direkt von evcc und zeigen keine Stale-Warnung. Falls doch: Prüfe ob der Fahrzeugname in evcc exakt mit `vehicles.yaml` übereinstimmt (Groß-/Kleinschreibung wird automatisch ignoriert).
+
+**Q: Was zeigt der Decision-Log?**
+A: Das Panel "🧠 System-Entscheidungen" zeigt transparent was das System beobachtet (Preise, SoC, Wallbox-Status), was es plant (Laden/Warten) und welche Aktionen es ausführt. Besonders nützlich um zu verstehen warum RL oder LP bestimmte Entscheidungen treffen.
 
 ---
 
