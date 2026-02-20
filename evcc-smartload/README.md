@@ -1,375 +1,137 @@
-# ⚡ EVCC-Smartload v4.3.11
+# EVCC-Smartload v5.0 — Hybrid LP+RL Optimizer
 
-**Intelligentes Energiemanagement für Home Assistant**
+**Intelligentes Energiemanagement für Home Assistant** — optimiert Hausbatterie und EV-Ladung anhand dynamischer Strompreise, Solar-Prognosen und Fahrer-Präferenzen.
 
-Optimiert Hausbatterie und Elektrofahrzeug-Ladung auf Basis dynamischer Strompreise, PV-Erzeugung und Verbrauchsprognosen. Nutzt einen Hybrid-Ansatz aus Linear Programming (LP) und Reinforcement Learning (RL).
+## Features
 
----
+| Feature | Details |
+|---|---|
+| **Percentil-Thresholds** | Batterie+EV laden in günstigsten P20/P30/P40-Fenstern statt statischer ct-Grenze |
+| **Hybrid LP+RL** | Linear Programming als Basis, Reinforcement Learning lernt dazu (7×5=35 Aktionen) |
+| **Charge-Sequencer** | Koordiniert mehrere EVs an einer Wallbox mit Quiet Hours (21–06 Uhr) |
+| **Telegram-Notifications** | Fahrer werden direkt gefragt: "Auf wieviel % laden?" → Inline-Buttons |
+| **Batterie→EV Entladung** | Entlädt Hausbatterie ins EV wenn Netzstrom teuer ist |
+| **Solar-Integration** | PV-Prognose beeinflusst Lade-Aggressivität und Entladetiefe |
+| **Vehicle Providers** | KIA (ccapi), Renault (renault-api), evcc, Manual, Custom |
+| **Dashboard** | SVG-Preischart mit P30-Linie, Lade-Zeitplan, Decision-Log, RL-Reife |
 
-## 🌟 Features
+## Installation
 
-- **Holistische Optimierung** — Batterie, EV, PV und Hauslast werden gemeinsam betrachtet
-- **Shadow RL** — Ein DQN-Agent lernt parallel zum LP-Optimizer und übernimmt automatisch wenn er besser ist
-- **Pro-Device RL Control** — RL kann für jedes Gerät (Batterie, einzelne Fahrzeuge) individuell gesteuert werden
-- **Multi-Fahrzeug-Support** — KIA Connect, Renault/Dacia API, manueller SoC-Input, evcc-Fallback
-- **🔋→🚗 Batterie-Entladung für EV** — Automatische Profitabilitätsberechnung mit Lade-/Entladeverlusten
-- **🎯 Dynamische Entladegrenzen** — bufferSoc/prioritySoc werden automatisch via evcc API angepasst
-- **📊 SVG-Preischart** — Responsiver Chart mit Solar-Prognose, Limit-Linien und Hover-Tooltips
-- **🧠 Decision-Log** — Transparentes „Was sehe ich, was plane ich, was mache ich?" im Dashboard
-- **📱 Mobile-First Dashboard** — Responsive Design für Smartphone, Tablet und Desktop
-- **🔌 Wallbox-Erkennung** — Verbindungsstatus und Ladestatus direkt im Dashboard
-- **Persistenter manueller SoC** — Für Fahrzeuge ohne API (z.B. GWM ORA 03)
-- **Modulare Architektur** — Sauber getrennte Module, einfach erweiterbar
+1. Repository als Custom Add-on in Home Assistant hinzufügen:
+   `Einstellungen → Add-ons → Add-on Store → ⋮ → Custom repositories`
+   URL: `https://github.com/Krinco1/HA_Addon_EVCC-Smartload`
 
----
+2. Add-on installieren und starten
 
-## 📦 Installation
+3. Dashboard öffnen: `http://homeassistant:8099`
 
-### Als Home Assistant Add-on
+## Konfiguration
 
-1. Repository hinzufügen:
-   ```
-   https://github.com/Krinco1/HA_Addon_EVCC-Smartload
-   ```
-2. Add-on **EVCC-Smartload** installieren
-3. Konfiguration anpassen (siehe unten)
-4. Add-on starten
-5. Dashboard öffnen: `http://homeassistant:8099`
+### config.yaml (Add-on Optionen)
 
-### Voraussetzungen
+```yaml
+evcc_url: "http://192.168.1.66:7070"
+battery_capacity_kwh: 33.1
+battery_max_price_ct: 25.0   # Hard-Ceiling — kein Laden teurer als das
+ev_max_price_ct: 30.0
+quiet_hours_enabled: true    # Kein EV-Wechsel nachts
+quiet_hours_start: 21
+quiet_hours_end: 6
+```
 
-- **evcc** (Electric Vehicle Charge Controller) auf demselben Netzwerk
-- **InfluxDB v1** (optional, für Historie und RL-Bootstrap)
-- Dynamischer Stromtarif in evcc konfiguriert (z.B. Tibber, aWATTar)
-- **Solar-Forecast** in evcc konfiguriert (optional, für PV-Prognose im Chart)
+### vehicles.yaml (Fahrzeug-APIs)
 
----
-
-## ⚙️ Konfiguration
-
-### Grundeinstellungen
-
-| Option | Default | Beschreibung |
-|--------|---------|--------------|
-| `evcc_url` | `http://192.168.1.66:7070` | evcc-Adresse |
-| `evcc_password` | *(leer)* | evcc-Passwort (falls gesetzt) |
-| `battery_capacity_kwh` | `33.1` | Kapazität der Hausbatterie |
-| `battery_max_price_ct` | `25.0` | Maximaler Ladepreis Batterie (ct/kWh) |
-| `ev_max_price_ct` | `30.0` | Maximaler Ladepreis EV (ct/kWh) |
-| `ev_target_soc` | `80` | Ziel-SoC für alle EVs (%) |
-| `ev_charge_deadline_hour` | `6` | Deadline für EV-Ladung (Uhrzeit) |
-
-### Batterie-Effizienz & EV-Entladung
-
-| Option | Default | Beschreibung |
-|--------|---------|--------------|
-| `battery_charge_efficiency` | `0.92` | AC→DC Ladeeffizienz (0.0–1.0) |
-| `battery_discharge_efficiency` | `0.92` | DC→AC Entladeeffizienz (0.0–1.0) |
-| `battery_to_ev_min_profit_ct` | `3.0` | Mindest-Preisvorteil für Batterie→EV (ct/kWh) |
-| `battery_to_ev_dynamic_limit` | `true` | Dynamische bufferSoc/prioritySoc Anpassung |
-| `battery_to_ev_floor_soc` | `20` | Absolute Entlade-Untergrenze (%) |
-
-**Roundtrip-Effizienz:** Bei 92% Lade- und 92% Entladeeffizienz ergibt sich eine Roundtrip-Effizienz von 84.6%. Strom der für 20ct/kWh geladen wurde kostet effektiv 23.6ct/kWh bei der Entladung.
-
-### InfluxDB
-
-| Option | Default | Beschreibung |
-|--------|---------|--------------|
-| `influxdb_host` | `192.168.1.67` | InfluxDB Host |
-| `influxdb_port` | `8086` | InfluxDB Port |
-| `influxdb_database` | `smartload` | Datenbank-Name |
-
-### Reinforcement Learning
-
-| Option | Default | Beschreibung |
-|--------|---------|--------------|
-| `rl_enabled` | `true` | Shadow RL aktivieren |
-| `rl_auto_switch` | `true` | Automatisch zu RL wechseln wenn bereit |
-| `rl_ready_threshold` | `0.8` | Win-Rate ab der RL „ready" ist |
-| `rl_fallback_threshold` | `0.7` | Win-Rate unter der zurück zu LP gewechselt wird |
-| `rl_ready_min_comparisons` | `200` | Mindest-Vergleiche vor Auto-Switch |
-
-### Fahrzeug-Provider
-
-Fahrzeuge werden über eine separate `vehicles.yaml` im Addon-Config-Verzeichnis konfiguriert.
-Das Format ist **identisch zur evcc.yaml** — du kannst deine Fahrzeug-Einträge direkt kopieren.
-
-Beim ersten Start wird automatisch eine Beispiel-Datei angelegt.
-
-1. Im HA File Editor unter `addon_configs/xxx_evcc_smartload/` die `vehicles.yaml` öffnen
-2. Einträge aus deiner `evcc.yaml` einfügen (auskommentieren)
-3. Add-on neu starten
+Wird beim ersten Start unter `/config/vehicles.yaml` angelegt (Beispieldatei):
 
 ```yaml
 vehicles:
   - name: KIA_EV9
-    type: template
-    template: kia
-    title: KIA EV9
-    user: email@example.com
-    password: 'geheim'
-    vin: KNXXXXXXX
-    capacity: 99.8
+    type: kia
+    username: "..."
+    password: "..."
+    capacity_kwh: 99.8
 
   - name: my_Twingo
-    type: template
-    template: renault
-    title: Renault Twingo Electric
-    user: email@example.com
-    password: 'geheim'
-    capacity: 22
-
-  # Smartload-spezifisch (kein evcc-Pendant):
-  - name: ORA_03
-    template: manual
-    title: GWM ORA 03
-    capacity: 63
+    type: evcc           # SoC direkt von evcc
+    capacity_kwh: 22
 ```
 
-**Feld-Mapping (automatisch):**
+### drivers.yaml (NEU in v5.0 — optional)
 
-| evcc Feld | → Smartload intern | Beschreibung |
-|-----------|-------------------|--------------|
-| `name` | `evcc_name` | Fahrzeug-Referenz in evcc |
-| `template` | `type` | Provider (kia, renault, custom, manual) |
-| `capacity` | `capacity_kwh` | Batteriekapazität |
-
-Unbekannte Felder (z.B. evcc's `language`, `mode`, `onIdentify`) werden ignoriert — dieselbe YAML funktioniert für beide Systeme.
-
-**Unterstützte Templates:** `kia`, `hyundai`, `renault`, `dacia`, `custom`, `manual`, `evcc`
-
-### Solar-Prognose (optional)
-
-Für die PV-Forecast-Anzeige im Chart muss in deiner evcc-Konfiguration ein Solar-Forecast konfiguriert sein:
+Für Telegram-Notifications unter `/config/drivers.yaml`:
 
 ```yaml
-# evcc.yaml
-tariffs:
-  grid:
-    type: tibber
-    token: ...
-  solar:
-    type: forecast.solar  # oder: solcast, etc.
-    ...
+# Bot erstellen: @BotFather in Telegram → /newbot
+telegram_bot_token: "123456:ABC-DEF..."
+
+drivers:
+  - name: "Nico"
+    vehicles: ["KIA_EV9"]
+    telegram_chat_id: 123456789    # /start im Bot, dann getUpdates
+
+  - name: "Fahrer2"
+    vehicles: ["ora_03", "my_Twingo"]
+    telegram_chat_id: 987654321
 ```
 
-Smartload erkennt automatisch ob evcc die Solar-Werte in Watt oder Kilowatt liefert und konvertiert entsprechend.
-Ohne Solar-Forecast nutzt Smartload eine Schätzung basierend auf aktueller PV-Leistung.
+**Ohne `drivers.yaml`**: System läuft vollständig ohne Notifications — EV-Ladung mit statischen Limits wie in v4.
 
----
+## API-Endpunkte
 
-## 🖥️ Dashboard
+| Methode | Endpoint | Beschreibung |
+|---|---|---|
+| GET | `/` | Dashboard (HTML) |
+| GET | `/health` | Heartbeat — `{"status":"ok","version":"5.0.0"}` |
+| GET | `/status` | Vollständiger System-Status inkl. Percentile, RL-Reife |
+| GET | `/summary` | Kompakte Übersicht für externe Integrationen |
+| GET | `/config` | Aktive Konfiguration (read-only) |
+| GET | `/vehicles` | Alle Fahrzeuge mit SoC, Alter, Verbindungsstatus |
+| GET | `/chart-data` | Preischart-Daten inkl. P30-Linie und Solar-Forecast |
+| GET | `/slots` | Aktuelle Preis-Slots der nächsten 24h |
+| GET | `/sequencer` | **v5.0** Lade-Zeitplan + offene Anfragen + Quiet Hours |
+| GET | `/drivers` | **v5.0** Fahrer-Status (kein Telegram-Token/Chat-ID) |
+| GET | `/decisions` | Letzte 40 Entscheidungen aus dem Decision-Log |
+| GET | `/comparisons` | LP-vs-RL Vergleichsstatistiken der letzten 50 Runs |
+| GET | `/strategy` | Aktuelle Strategie-Erklärung (Batterie + EV) |
+| GET | `/rl-devices` | RL-Modus und Lern-Fortschritt pro Gerät |
+| GET | `/docs` | Eingebaute Dokumentation (HTML) |
+| GET | `/docs/api` | API-Referenz (HTML) |
+| POST | `/vehicles/manual-soc` | Manuellen SoC setzen `{"vehicle":"KIA_EV9","soc":45}` |
+| POST | `/vehicles/refresh` | Sofortigen API-Poll für ein Fahrzeug auslösen |
+| POST | `/sequencer/request` | **v5.0** Lade-Anfrage stellen `{"vehicle":"...","target_soc":80}` |
+| POST | `/sequencer/cancel` | **v5.0** Lade-Anfrage abbrechen `{"vehicle":"..."}` |
+| POST | `/rl-override` | RL-Modus für ein Gerät überschreiben |
 
-Das Dashboard ist unter `http://homeassistant:8099` erreichbar und zeigt:
-
-- **Aktueller Strompreis** mit Farbcodierung (grün < 25ct, orange < 35ct, rot ≥ 35ct)
-- **Batterie-Status** mit SoC-Balken
-- **PV-Leistung** und Hausverbrauch
-- **📊 SVG-Preischart** — Responsive Darstellung mit:
-  - Preise innerhalb der Balken (schwarze Zahl auf Farbe)
-  - Solar-Prognose als gelbe Fläche mit eigener Y-Achse
-  - Limit-Linien (🔋 Batterie, 🔌 EV) als gestrichelte Linien
-  - „Jetzt"-Markierung mit Glow-Effekt
-  - Hover-Tooltips mit Details
-- **⚡ Energiebilanz** — PV, Hausverbrauch, Netz, Batterie
-- **🔋→🚗 Batterie-Entladung** — Profitabilitätsberechnung mit dynamischen Zonen
-- **Ladeslots** pro Gerät mit Kosten-Kalkulation
-- **🧠 Decision-Log** — Transparente System-Entscheidungen:
-  - 👁️ SEHE: Beobachtungen (Preis, SoC, PV, Wallbox-Status)
-  - 🧠 PLANE: Entscheidungen (Laden erlaubt? Warten?)
-  - ⚡ AKTION: Ausgeführte Befehle an evcc
-  - 🤖 RL: RL-Status und Abweichungen von LP
-- **🤖 RL-Reifegrad** — Fortschritt und Pro-Device Win-Rates
-- **🔌 Wallbox-Status** — Verbunden / Lädt direkt neben Fahrzeug-Name
-- **Manuelle SoC-Eingabe** für Fahrzeuge ohne API
-
-Das Dashboard ist **responsive** (Mobile-First) und aktualisiert sich automatisch alle 60 Sekunden.
-
-### Batterie→EV Visualisierung
-
-Die Batterie-Entladung zeigt drei farbige Zonen:
-- 🔴 **Rot** (0% → prioritySoc): Geschützt, keine Entladung
-- 🟡 **Gelb** (prioritySoc → bufferSoc): Puffer, nur für Hausverbrauch
-- 🟢 **Grün** (bufferSoc → 100%): Darf fürs EV genutzt werden
-
-Die Grenzen werden dynamisch angepasst basierend auf Solar-Prognose, günstige Netzstunden und EV-Ladebedarf.
-
-### Wallbox-Erkennung
-
-Fahrzeug-Status wird automatisch aus evcc-Loadpoints erkannt (case-insensitive):
-- **⚡ Lädt** — Fahrzeug lädt aktiv an der Wallbox
-- **🔌 Verbunden** — Fahrzeug angeschlossen, aber lädt nicht
-- **Stale-Warnung** wird nur angezeigt wenn Fahrzeug NICHT am Wallbox verbunden ist
-
-### Zwei Zeitstempel
-
-Das Dashboard unterscheidet zwischen:
-- **📡 Poll-Zeit** (wann unser System zuletzt geprüft hat) — prominent angezeigt
-- **Daten-Alter** (wann das Fahrzeug zuletzt Daten gesendet hat) — in Stale-Warnungen
-
----
-
-## 🔌 API Referenz
-
-Basis-URL: `http://homeassistant:8099`
-
-### GET Endpunkte
-
-| Endpunkt | Beschreibung |
-|----------|--------------|
-| `/health` | Health-Check (`{"status": "ok", "version": "4.3.11"}`) |
-| `/status` | Vollständiger System-Status inkl. RL-Metriken |
-| `/vehicles` | Alle Fahrzeuge mit SoC, Datenquelle, manuellem Override |
-| `/slots` | Detaillierte Ladeslots inkl. Batterie→EV Profitabilität |
-| `/chart-data` | Preischart-Daten mit Solar-Prognose (kW pro Stunde) |
-| `/rl-devices` | RL Device Control Status pro Gerät |
-| `/decisions` | System-Entscheidungen (Beobachtungen, Pläne, Aktionen) |
-| `/config` | Aktuelle Konfiguration |
-| `/summary` | Kurzübersicht für schnellen Check |
-| `/comparisons` | Letzte 50 LP/RL-Vergleiche |
-| `/strategy` | Aktuelle Strategie-Entscheidungen |
-
-### POST Endpunkte
-
-| Endpunkt | Body | Beschreibung |
-|----------|------|--------------|
-| `/vehicles/manual-soc` | `{"vehicle": "ORA_03", "soc": 45}` | Manuellen SoC setzen |
-| `/vehicles/refresh` | `{"vehicle": "KIA_EV9"}` | Sofortigen Refresh auslösen |
-| `/rl-override` | `{"device": "battery", "mode": "manual_lp"}` | RL-Mode Override (`manual_lp`, `manual_rl`, `auto`) |
-
-### evcc API Integration
-
-Smartload steuert folgende evcc-Parameter automatisch:
-
-| evcc Endpunkt | Wann | Beschreibung |
-|---------------|------|--------------|
-| `POST /api/batterygridchargelimit/{eur}` | Jeder Loop | Batterie-Ladegrenze (Strompreis) |
-| `POST /api/smartcostlimit/{eur}` | Jeder Loop | EV-Ladegrenze (Strompreis) |
-| `POST /api/buffersoc/{soc}` | Bei Battery→EV | Ab welchem SoC Batterie EV unterstützt |
-| `POST /api/bufferstartsoc/{soc}` | Bei Battery→EV | Ab welchem SoC EV-Laden starten darf |
-| `POST /api/prioritysoc/{soc}` | Bei Battery→EV | Unter welchem SoC Batterie Vorrang hat |
-| `POST /api/batterydischargecontrol/{bool}` | Bei Battery→EV | Batterie-Entladung an/aus |
-| `POST /api/batterymode/{mode}` | Bei Bedarf | Batterie-Modus (normal/hold/charge) |
-| `POST /api/loadpoints/{id}/mode/{mode}` | Bei Bedarf | Loadpoint-Modus (off/now/minpv/pv) |
-
----
-
-## 🏗️ Architektur (v4.3.11)
+## v5.0 Architektur
 
 ```
-rootfs/app/
-├── main.py              # Startup + Main Loop + Battery→EV + Decision Logging
-├── version.py           # Single source of truth für Version
-├── config.py            # Konfiguration aus options.json + vehicles.yaml
-├── logging_util.py      # Zentrales Logging
-├── evcc_client.py       # evcc REST API Client (Tariffe, Battery, Loadpoint, Buffer)
-├── influxdb_client.py   # InfluxDB Client
-├── state.py             # SystemState, Action, VehicleStatus, ManualSocStore, calc_solar_surplus_kwh
-├── decision_log.py      # 🧠 Decision Log (Beobachtungen, Pläne, Aktionen)
-├── controller.py        # Aktionen → evcc + dynamische Entladegrenzen
-├── rl_agent.py          # DQN Agent + Replay Memory
-├── comparator.py        # LP/RL Vergleich + RL Device Controller (SQLite)
-├── vehicle_monitor.py   # VehicleMonitor + DataCollector (case-insensitive Wallbox-Matching)
-├── optimizer/
-│   ├── holistic.py      # LP Optimizer
-│   └── event_detector.py
-├── vehicles/            # Modulares Provider-System
-│   ├── base.py
-│   ├── manager.py
-│   ├── kia_provider.py
-│   ├── renault_provider.py
-│   ├── evcc_provider.py
-│   └── custom_provider.py
-└── web/
-    ├── server.py        # HTTP Server + JSON API + Slot-Berechnung + /decisions Endpoint
-    ├── template_engine.py
-    ├── templates/
-    │   └── dashboard.html  # Mobile-First Dashboard mit SVG-Chart + Decision-Log
-    └── static/
-        └── app.js       # Dashboard JS: SVG-Chart, Tooltips, Battery→EV, RL-Tabelle, Decision-Log
+Strompreise (24h) → Percentile P20/P30/P40/P60/P80
+                         ↓
+LP-Optimizer      → Batterie-Aktion (hold/charge_p40/pv/discharge)
+RL-Agent          → lernt von LP, übernimmt wenn Win-Rate > 80%
+                         ↓
+Charge-Sequencer  → welches EV wann? → evcc limitSoc/mode
+                         ↓
+Telegram Bot      → Fahrer fragt: "KIA_EV9 auf 80% laden?"
 ```
 
-### Wichtige Design-Prinzipien
+## Wichtige Hinweise
 
-1. **HTML nie in Python f-strings** — Templates sind separate `.html`-Dateien
-2. **Single Source of Truth** — `ManualSocStore` für manuelle SoC-Werte, `VehicleMonitor` für alle Fahrzeugdaten
-3. **Version nur in `version.py`** — config.yaml referenziert nur für HA
-4. **JSON-API First** — Dashboard lädt Daten via API, kein serverseitiges HTML-Rendering
-5. **Thread-safe** — ManualSocStore nutzt Locks, alle Module sind thread-safe
-6. **Per-Device Persistenz** — RL-Vergleiche und Win-Rates überleben Neustarts (JSON + SQLite)
-7. **Dynamische evcc-Steuerung** — bufferSoc/prioritySoc werden basierend auf Forecasts gesetzt
-8. **Unit-Autodetection** — Solar-Werte werden automatisch als W oder kW erkannt
-9. **Case-insensitive Matching** — evcc-Fahrzeugnamen werden unabhängig von Groß-/Kleinschreibung zugeordnet
-10. **Transparente Entscheidungen** — Decision-Log macht System-Entscheidungen nachvollziehbar
+- **RL Q-Table Reset bei v5.0**: State Space ändert sich (25→31 Features). RL lernt innerhalb ~2 Tagen vom LP neu. Batterie läuft während Lernphase über LP.
+- **Quiet Hours**: Zwischen 21:00–06:00 kein automatisches EV-Umstecken. Wer hängt, lädt.
+- **Telegram**: Direkte Bot API, kein HA Automation/Webhook nötig.
+- **drivers.yaml optional**: Ohne Datei volles Bestandsverhalten.
 
----
+## Fahrzeug-Datenstand
 
-## 🔋→🚗 Batterie-Entladung für EV
+| Fahrzeug | Provider | SoC-Verfügbarkeit |
+|---|---|---|
+| KIA EV9 (99.8 kWh) | kia (ccapi) | Jederzeit |
+| Renault Twingo (22 kWh) | renault-api | Jederzeit |
+| ORA 03 (63 kWh) | evcc | Nur wenn verbunden |
 
-Smartload berechnet automatisch ob es sich lohnt, die Hausbatterie fürs EV zu entladen.
+## Support & Updates
 
-### Berechnung
-
-```
-Effektive Batterie-Kosten = Ladepreis ÷ Roundtrip-Effizienz
-Beispiel: 20ct ÷ 0.846 = 23.6ct/kWh
-
-Ersparnis = Netzpreis - Batterie-Kosten
-Beispiel: 35ct - 23.6ct = 11.4ct/kWh → lohnt sich!
-```
-
-### Dynamische Entladegrenze
-
-Statt einer fixen Grenze berechnet Smartload wie tief die Batterie sicher entladen werden darf:
-
-1. **Solar-Refill**: PV-Prognose minus Hausverbrauch → erwartete Wiederaufladung
-2. **Netz-Refill**: Günstige Stunden × Ladeleistung → zusätzliche Aufladung
-3. **Sicherheit**: 80% der erwarteten Refill-Menge
-4. **bufferSoc** = Aktueller SoC - sichere Entladung (min: floor_soc)
-
-**Beispiel — Sonnig + günstige Nachtpreise:**
-- Solar: +35% Refill, Netz: +15% → bufferSoc = 30% → 40% für EV frei
-
-**Beispiel — Bewölkt + teuer:**
-- Solar: +5%, Netz: 0% → bufferSoc = 66% → nur 4% für EV
-
----
-
-## ❓ FAQ
-
-**Q: Warum zeigt das Dashboard 0% für mein Fahrzeug?**
-A: Prüfe ob ein Vehicle Provider konfiguriert ist. Ohne Provider sind Daten nur verfügbar wenn das Fahrzeug an der Wallbox hängt. Alternativ: Manuellen SoC eingeben.
-
-**Q: Was passiert wenn evcc nicht erreichbar ist?**
-A: Das Add-on wartet 60 Sekunden und versucht es erneut. Kein Datenverlust.
-
-**Q: Wie sicher ist die RL-Steuerung?**
-A: RL läuft im „Shadow Mode" — es beobachtet nur und lernt. Erst bei einer Win-Rate ≥ 80% über 200+ Vergleiche wird es automatisch aktiv. Du kannst das pro Gerät überschreiben.
-
-**Q: GWM ORA hat keine API – was tun?**
-A: Nutze den `manual` Provider und gib den SoC über das Dashboard ein. Der Wert wird persistent gespeichert und überlebt Neustarts.
-
-**Q: Warum zeigt das Chart keine Solar-Prognose?**
-A: Du brauchst einen Solar-Forecast in deiner evcc-Konfiguration (z.B. `forecast.solar` oder `solcast`). Die Werte werden automatisch als W oder kW erkannt.
-
-**Q: Was bedeutet die Batterie→EV Karte?**
-A: Sie zeigt ob es günstiger ist, die Hausbatterie ins EV zu entladen statt Netzstrom zu nutzen. Die Berechnung berücksichtigt Lade-/Entladeverluste und den aktuellen Strompreis.
-
-**Q: Was ist bufferSoc und warum ändert es sich?**
-A: `bufferSoc` ist ein evcc-Parameter der bestimmt, ab welchem SoC die Batterie EV-Laden unterstützen darf. Smartload setzt diesen Wert dynamisch basierend auf Solar-Prognose, günstige Strompreise und EV-Bedarf.
-
-**Q: Warum zeigt mein Fahrzeug "Daten veraltet" obwohl es am Wallbox hängt?**
-A: Das sollte seit v4.3.11 nicht mehr passieren. Fahrzeuge am Wallbox bekommen ihre Daten direkt von evcc und zeigen keine Stale-Warnung. Falls doch: Prüfe ob der Fahrzeugname in evcc exakt mit `vehicles.yaml` übereinstimmt (Groß-/Kleinschreibung wird automatisch ignoriert).
-
-**Q: Was zeigt der Decision-Log?**
-A: Das Panel "🧠 System-Entscheidungen" zeigt transparent was das System beobachtet (Preise, SoC, Wallbox-Status), was es plant (Laden/Warten) und welche Aktionen es ausführt. Besonders nützlich um zu verstehen warum RL oder LP bestimmte Entscheidungen treffen.
-
----
-
-## 📜 Lizenz
-
-MIT License – siehe [LICENSE](LICENSE)
-
-## 🤝 Beitragen
-
-Issues und Pull Requests sind willkommen auf [GitHub](https://github.com/Krinco1/HA_Addon_EVCC-Smartload).
+Dashboard: `http://homeassistant:8099`
+Docs: `http://homeassistant:8099/docs`
+GitHub: https://github.com/Krinco1/HA_Addon_EVCC-Smartload

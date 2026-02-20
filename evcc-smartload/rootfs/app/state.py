@@ -1,7 +1,9 @@
 """
 Shared data structures for system state, actions, and vehicle status.
 
-These classes are the *single source of truth* that all modules read from and write to.
+v5.0: SystemState extended with price percentiles and solar forecast bucket.
+      to_vector() now returns 31 features (was 25).
+      Action extended: battery 7 actions, EV 5 actions.
 """
 
 import json
@@ -27,23 +29,23 @@ class SystemState:
     timestamp: datetime
 
     # Battery
-    battery_soc: float  # 0-100
-    battery_power: float  # W, positive = charging
+    battery_soc: float          # 0-100
+    battery_power: float        # W, positive = charging
 
     # Grid
-    grid_power: float  # W, positive = import
-    current_price: float  # EUR/kWh
+    grid_power: float           # W, positive = import
+    current_price: float        # EUR/kWh
 
     # PV
-    pv_power: float  # W
+    pv_power: float             # W
 
     # House
-    home_power: float  # W
+    home_power: float           # W
 
     # EV (the vehicle currently at the wallbox)
     ev_connected: bool
-    ev_soc: float  # 0-100
-    ev_power: float  # W
+    ev_soc: float               # 0-100
+    ev_power: float             # W
     ev_name: str = ""
     ev_capacity_kwh: float = 0
     ev_charge_power_kw: float = 11
@@ -52,46 +54,87 @@ class SystemState:
     price_forecast: List[float] = field(default_factory=list)
     pv_forecast: List[float] = field(default_factory=list)
 
+    # v5: Price percentiles from 24h tariff window
+    # e.g. {20: 0.12, 30: 0.15, 40: 0.18, 60: 0.25, 80: 0.32}
+    price_percentiles: Dict[int, float] = field(default_factory=dict)
+    price_spread: float = 0.0           # P80 - P20 (market volatility)
+    hours_cheap_remaining: int = 0      # hours below P30 remaining today
+    solar_forecast_total_kwh: float = 0.0
+
     def to_vector(self) -> np.ndarray:
-        """Normalised feature vector for the RL agent (25-d)."""
+        """Normalised feature vector for the RL agent (31-d).
+
+        Indices 0-24: identical to v4 (backward-compatible layout kept for
+                       reference; Q-table is reset anyway due to new actions).
+        Indices 25-30: six new forecast context features.
+        """
         hour = self.timestamp.hour
         weekday = self.timestamp.weekday()
 
         features = [
-            self.battery_soc / 100,
-            np.clip(self.battery_power / 5000, -1, 1),
-            np.clip(self.grid_power / 10000, -1, 1),
-            self.current_price / 0.5,
-            np.clip(self.pv_power / 10000, 0, 1),
-            np.clip(self.home_power / 5000, 0, 1),
-            float(self.ev_connected),
-            self.ev_soc / 100 if self.ev_connected else 0,
-            np.clip(self.ev_power / 11000, 0, 1),
-            np.sin(2 * np.pi * hour / 24),
-            np.cos(2 * np.pi * hour / 24),
-            np.sin(2 * np.pi * weekday / 7),
-            np.cos(2 * np.pi * weekday / 7),
+            self.battery_soc / 100,                             # 0
+            np.clip(self.battery_power / 5000, -1, 1),          # 1
+            np.clip(self.grid_power / 10000, -1, 1),            # 2
+            self.current_price / 0.5,                           # 3
+            np.clip(self.pv_power / 10000, 0, 1),               # 4
+            np.clip(self.home_power / 5000, 0, 1),              # 5
+            float(self.ev_connected),                           # 6
+            self.ev_soc / 100 if self.ev_connected else 0,      # 7
+            np.clip(self.ev_power / 11000, 0, 1),               # 8
+            np.sin(2 * np.pi * hour / 24),                      # 9
+            np.cos(2 * np.pi * hour / 24),                      # 10
+            np.sin(2 * np.pi * weekday / 7),                    # 11
+            np.cos(2 * np.pi * weekday / 7),                    # 12
         ]
 
         prices = (self.price_forecast[:6] + [0] * 6)[:6]
-        features.extend([p / 0.5 for p in prices])
+        features.extend([p / 0.5 for p in prices])             # 13-18
 
         pv = (self.pv_forecast[:6] + [0] * 6)[:6]
-        features.extend([p / 10000 for p in pv])
+        features.extend([p / 10000 for p in pv])               # 19-24
+
+        # --- v5: 6 new forecast-context features ---
+        p20 = self.price_percentiles.get(20, self.current_price)
+        p60 = self.price_percentiles.get(60, self.current_price)
+        features += [
+            float(np.clip(p20 / 0.5, 0, 1)),                                    # 25 P20 normalised
+            float(np.clip(p60 / 0.5, 0, 1)),                                    # 26 P60 normalised
+            float(np.clip(self.price_spread / 0.3, 0, 1)),                      # 27 spread normalised
+            float(min(self.hours_cheap_remaining / 12, 1.0)),                   # 28 cheap hours remaining
+            float(min(self.solar_forecast_total_kwh / 30, 1.0)),               # 29 solar forecast
+            float(self.timestamp.timetuple().tm_yday / 365),                   # 30 season (0=Jan, ~0.5=Jul)
+        ]
 
         return np.array(features, dtype=np.float32)
 
 
 # =============================================================================
-# Action (output of optimizer / RL agent)
+# Action (output of optimizer / RL agent)  — v5 extended action space
 # =============================================================================
 
 @dataclass
 class Action:
-    """Charging decision for battery and EV."""
+    """Charging decision for battery and EV.
 
-    battery_action: int  # 0=hold, 1=charge_grid, 2=charge_pv_only, 3=discharge
-    ev_action: int  # 0=no_charge, 1=charge_cheap, 2=charge_now, 3=charge_pv_only
+    Battery actions (7):
+        0 = hold
+        1 = charge_p20  (charge only when price ≤ P20 of 24h window)
+        2 = charge_p40
+        3 = charge_p60
+        4 = charge_max  (charge up to config battery_max_price_ct)
+        5 = charge_pv   (PV-only / free surplus)
+        6 = discharge
+
+    EV actions (5):
+        0 = no_charge
+        1 = charge_p30  (charge only when price ≤ P30)
+        2 = charge_p60
+        3 = charge_max  (charge up to config ev_max_price_ct)
+        4 = charge_pv   (PV-only)
+    """
+
+    battery_action: int
+    ev_action: int
 
     battery_limit_eur: Optional[float] = None
     ev_limit_eur: Optional[float] = None
@@ -109,30 +152,25 @@ class VehicleStatus:
     soc: float
     capacity_kwh: float
     range_km: float
-    last_update: datetime  # when the vehicle DATA was generated (car timestamp)
+    last_update: datetime
     connected_to_wallbox: bool = False
     charging: bool = False
-    data_source: str = "evcc"  # 'evcc', 'direct_api', 'cache', 'manual'
+    data_source: str = "evcc"
     provider_type: str = "evcc"
-    last_poll: Optional[datetime] = None  # when WE last successfully polled
+    last_poll: Optional[datetime] = None
 
-    # Manual SoC override
     manual_soc: Optional[float] = None
     manual_soc_timestamp: Optional[datetime] = None
 
     def get_effective_soc(self) -> float:
-        """Return best-known SoC (manual override wins over stale/zero data)."""
         if self.manual_soc is not None and self.manual_soc_timestamp:
-            # Manual always wins if API reports 0% (no real data)
             if self.soc == 0:
                 return self.manual_soc
-            # Manual wins if newer than last API update
             if not self.last_update or self.manual_soc_timestamp > self.last_update:
                 return self.manual_soc
         return self.soc
 
     def get_poll_age_string(self) -> str:
-        """How long ago we last polled (not how old the data is)."""
         ts = self.last_poll or self.last_update
         if not ts:
             return "unbekannt"
@@ -145,7 +183,6 @@ class VehicleStatus:
         return f"vor {int(minutes / 60)}h {minutes % 60}min"
 
     def get_data_age_string(self) -> str:
-        """How old the actual vehicle data is."""
         if not self.last_update:
             return "unbekannt"
         age = datetime.now(timezone.utc) - self.last_update
@@ -163,12 +200,10 @@ class VehicleStatus:
 
 
 # =============================================================================
-# Thread-safe store for manual SoC values (persists to disk)
+# Thread-safe store for manual SoC values
 # =============================================================================
 
 class ManualSocStore:
-    """Persistent store for manually entered SoC values (e.g. ORA 03)."""
-
     def __init__(self):
         self._lock = threading.Lock()
         self._data: Dict[str, Dict[str, Any]] = {}
@@ -207,23 +242,42 @@ class ManualSocStore:
             return self._data.copy()
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Percentile calculation helper (used by main loop, LP, RL)
+# =============================================================================
+
+def compute_price_percentiles(tariffs: List[Dict]) -> Dict[int, float]:
+    """Compute price percentiles from a list of tariff dicts.
+
+    Returns {20: ..., 30: ..., 40: ..., 60: ..., 80: ...} in EUR/kWh.
+    """
+    prices = []
+    for t in tariffs:
+        try:
+            prices.append(float(t.get("value", 0)))
+        except Exception:
+            continue
+    if not prices:
+        return {}
+    arr = np.array(prices, dtype=np.float32)
+    return {
+        20: float(np.percentile(arr, 20)),
+        30: float(np.percentile(arr, 30)),
+        40: float(np.percentile(arr, 40)),
+        60: float(np.percentile(arr, 60)),
+        80: float(np.percentile(arr, 80)),
+    }
+
+
+# =============================================================================
 # Solar surplus helpers
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def calc_solar_surplus_kwh(solar_forecast: List[Dict], home_consumption_kw: float = 1.0) -> float:
-    """Calculate expected solar surplus energy in kWh from evcc forecast entries.
-
-    Each forecast entry has 'start' (ISO timestamp) and 'value' (kW production).
-    We compute actual energy by determining the duration of each time slot from
-    the difference between consecutive timestamps.
-
-    Returns the total surplus (production minus home consumption) in kWh.
-    """
+    """Calculate expected solar surplus energy in kWh from evcc forecast entries."""
     if not solar_forecast or len(solar_forecast) < 2:
         return 0.0
 
-    # Parse and sort by start time
     entries = []
     for t in solar_forecast:
         try:
@@ -245,31 +299,24 @@ def calc_solar_surplus_kwh(solar_forecast: List[Dict], home_consumption_kw: floa
         return 0.0
 
     entries.sort(key=lambda x: x[0])
-
-    # Detect typical slot duration from first gap
-    typical_gap = (entries[1][0] - entries[0][0]).total_seconds() / 3600  # hours
+    typical_gap = (entries[1][0] - entries[0][0]).total_seconds() / 3600
     if typical_gap <= 0 or typical_gap > 2:
-        typical_gap = 0.25  # default 15 min
+        typical_gap = 0.25
 
-    # Auto-detect unit: if median value > 100, probably Watts not kW
     vals = [v for _, v in entries]
     median_val = sorted(vals)[len(vals) // 2]
-    unit_factor = 0.001 if median_val > 100 else 1.0  # W → kW conversion
+    unit_factor = 0.001 if median_val > 100 else 1.0
 
     total_surplus = 0.0
     for i, (start, val_raw) in enumerate(entries):
         val_kw = val_raw * unit_factor
-
-        # Determine slot duration
         if i < len(entries) - 1:
             gap_h = (entries[i + 1][0] - start).total_seconds() / 3600
             if gap_h <= 0 or gap_h > 2:
                 gap_h = typical_gap
         else:
             gap_h = typical_gap
-
         surplus_kw = max(0, val_kw - home_consumption_kw)
         total_surplus += surplus_kw * gap_h
 
-    # Sanity cap: max ~50 kWh per day × 2 days = 100 kWh for residential
     return min(total_surplus, 100.0)

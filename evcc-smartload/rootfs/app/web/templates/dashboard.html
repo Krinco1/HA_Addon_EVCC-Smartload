@@ -34,6 +34,7 @@
         .legend-mid::before { background: #ffaa00; }
         .legend-exp::before { background: #ff4444; }
         .legend-solar::before { background: rgba(255,221,0,0.25); border: 1px solid #ffdd00; border-radius: 0; }
+        .legend-p30::before { background: transparent; border: 2px dashed #00d4ff; border-radius: 0; }
         .chart-tooltip { position: absolute; background: #0f3460; border: 1px solid #555; border-radius: 6px; padding: 8px 12px; font-size: 0.82em; pointer-events: none; z-index: 20; white-space: nowrap; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
         .chart-tooltip .tt-time { color: #00d4ff; font-weight: bold; }
         .chart-tooltip .tt-price { font-size: 1.1em; }
@@ -43,7 +44,6 @@
         .eb-item { background: #0f3460; border-radius: 8px; padding: 12px; text-align: center; }
         .eb-value { font-size: 1.3em; font-weight: bold; }
         .eb-label { font-size: 0.75em; color: #888; margin-top: 2px; }
-        .eb-arrow { color: #888; font-size: 0.9em; }
 
         .device-card { background: #16213e; border-radius: 10px; padding: 18px; margin-bottom: 15px; }
         .device-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
@@ -64,6 +64,28 @@
         .summary-item { text-align: center; }
         .summary-value { font-size: 1.2em; font-weight: bold; color: #00d4ff; }
         .summary-label { font-size: 0.8em; color: #888; }
+
+        /* v5.0: Charge Sequencer panel */
+        .seq-card { background: #16213e; border-radius: 10px; padding: 18px; margin-bottom: 15px; }
+        .seq-request { background: #0f3460; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .seq-request .vehicle-name { font-weight: bold; color: #00d4ff; }
+        .seq-request .soc-info { color: #aaa; font-size: 0.85em; }
+        .seq-slot { background: #0f3460; border-radius: 8px; padding: 10px; margin-bottom: 4px; display: flex; gap: 12px; align-items: center; }
+        .seq-slot .time-range { font-weight: bold; font-size: 0.9em; }
+        .seq-slot .vehicle-badge { background: #1a2e5e; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #00d4ff; }
+        .seq-slot .slot-source { font-size: 0.8em; }
+        .seq-slot .slot-source.cheap { color: #00ff88; }
+        .seq-slot .slot-source.normal { color: #ffaa00; }
+        .seq-slot .slot-source.expensive { color: #ff4444; }
+        .quiet-badge { display: inline-block; background: #1a2e1a; border: 1px solid #00ff88; color: #00ff88; padding: 3px 10px; border-radius: 4px; font-size: 0.8em; }
+        .quiet-badge.active { background: #2e0a0a; border-color: #ffaa00; color: #ffaa00; }
+        .seq-add-btn { background: #0f3460; color: #00d4ff; border: 1px solid #00d4ff; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+        .seq-cancel-btn { background: #2e0a0a; color: #ff4444; border: 1px solid #ff4444; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+
+        /* Percentile indicator */
+        .percentile-bar { display: flex; gap: 4px; margin: 8px 0; align-items: center; }
+        .percentile-marker { width: 3px; height: 20px; border-radius: 2px; }
+        .percentile-label { font-size: 0.75em; color: #888; }
 
         .rl-card { background: #16213e; border-radius: 10px; padding: 18px; margin-bottom: 15px; }
         .progress-bar { height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; margin: 8px 0; }
@@ -98,8 +120,7 @@
         .links a:hover { text-decoration: underline; }
         .btn-manual { background: #0f3460; color: #00d4ff; border: 1px solid #00d4ff; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
 
-        /* ============ MOBILE FIRST ============ */
-        /* Base: mobile (< 600px) */
+        /* Mobile */
         .container { max-width: 1100px; margin: 0 auto; padding: 10px; }
         .header h1 { font-size: 1.2em; }
         .status-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -115,7 +136,6 @@
         .summary-value { font-size: 1em; }
         .modal-box { padding: 20px; }
 
-        /* Tablet (600px+) */
         @media (min-width: 600px) {
             .container { padding: 15px; }
             .header h1 { font-size: 1.5em; }
@@ -132,19 +152,16 @@
             .summary-value { font-size: 1.2em; }
         }
 
-        /* Desktop (900px+) */
         @media (min-width: 900px) {
             .container { padding: 20px; }
         }
 
-        /* Touch-friendly buttons on mobile */
         @media (hover: none) and (pointer: coarse) {
             .mode-btn { padding: 8px 16px; font-size: 0.9em; }
             .btn-manual { padding: 10px 18px; }
             .btn-cancel, .btn-save { padding: 12px; }
         }
 
-        /* Prevent horizontal overflow */
         html, body { overflow-x: hidden; }
         img, table, pre { max-width: 100%; }
     </style>
@@ -180,20 +197,30 @@
             <span class="legend-mid">Mittel (25–35ct)</span>
             <span class="legend-exp">Teuer (&gt;35ct)</span>
             <span class="legend-solar">☀️ Solar-Prognose</span>
+            <span class="legend-p30">P30-Schwelle</span>
         </div>
     </div>
 
     <!-- Energy balance -->
     <div class="device-card" id="energyBalanceCard">
         <h3 style="margin-bottom: 12px;">⚡ Energiebilanz</h3>
-        <div id="energyBalance" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
-        </div>
+        <div id="energyBalance" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;"></div>
     </div>
 
     <!-- Battery-to-EV optimization -->
     <div class="device-card" id="batToEvCard" style="display:none;">
         <h3 style="margin-bottom: 12px;">🔋→🚗 Batterie-Entladung für EV</h3>
         <div id="batToEvContent"></div>
+    </div>
+
+    <!-- v5.0: Charge Sequencer -->
+    <div class="seq-card" id="sequencerCard" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+            <h3>📅 Lade-Zeitplan</h3>
+            <div id="quietBadge"></div>
+        </div>
+        <div id="seqRequests"></div>
+        <div id="seqSchedule"></div>
     </div>
 
     <!-- Devices -->
@@ -222,11 +249,12 @@
         <a href="/docs" style="font-weight: bold;">📚 Dokumentation</a><br><br>
         API: <a href="/status">/status</a> | <a href="/slots">/slots</a> | <a href="/vehicles">/vehicles</a> |
         <a href="/rl-devices">/rl-devices</a> | <a href="/chart-data">/chart-data</a> | <a href="/strategy">/strategy</a> |
-        <a href="/decisions">/decisions</a>
+        <a href="/decisions">/decisions</a> | <a href="/sequencer">/sequencer</a> | <a href="/drivers">/drivers</a>
         <br>Auto-refresh alle 60 Sekunden
     </div>
 </div>
 
+<!-- Manual SoC modal -->
 <div class="modal-overlay" id="manualSocModal">
     <div class="modal-box">
         <h2>✏️ Manuellen SoC eingeben</h2>
@@ -242,6 +270,24 @@
         </div>
         <div class="msg-error" id="modalError"></div>
         <div class="msg-success" id="modalSuccess"></div>
+    </div>
+</div>
+
+<!-- Sequencer request modal -->
+<div class="modal-overlay" id="seqModal">
+    <div class="modal-box">
+        <h2>📅 Lade-Anfrage</h2>
+        <p style="color: #888; margin-bottom: 20px;">Fahrzeug: <strong class="green" id="seqModalVehicle"></strong></p>
+        <div style="margin: 20px 0;">
+            <label style="display: block; margin-bottom: 8px; color: #eee;">Ziel-Ladestand (%):</label>
+            <input type="number" id="seqTargetSoc" min="20" max="100" step="5" value="80">
+        </div>
+        <div class="btn-row">
+            <button class="btn-cancel" onclick="closeSeqModal()">Abbrechen</button>
+            <button class="btn-save" onclick="submitSeqRequest()">Einplanen</button>
+        </div>
+        <div class="msg-error" id="seqModalError"></div>
+        <div class="msg-success" id="seqModalSuccess"></div>
     </div>
 </div>
 

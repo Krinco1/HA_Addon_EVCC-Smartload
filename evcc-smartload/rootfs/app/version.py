@@ -1,2 +1,1 @@
-"""Single source of truth for version number."""
-VERSION = "4.3.11"
+VERSION = "5.0.0"

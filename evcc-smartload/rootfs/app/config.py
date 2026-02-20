@@ -3,6 +3,7 @@ Configuration management for EVCC-Smartload.
 
 Loads configuration from Home Assistant's options.json and provides typed defaults.
 Vehicle providers are loaded from a separate /config/vehicles.yaml file.
+Driver / Telegram config from /config/drivers.yaml.
 """
 
 import json
@@ -15,6 +16,8 @@ from logging_util import log
 OPTIONS_PATH = "/data/options.json"
 VEHICLES_YAML_PATH = "/config/vehicles.yaml"
 VEHICLES_EXAMPLE_PATH = "/app/vehicles.yaml.example"
+DRIVERS_YAML_PATH = "/config/drivers.yaml"
+DRIVERS_EXAMPLE_PATH = "/app/drivers.yaml.example"
 
 # Persistent data paths
 STATE_PATH = "/data/smartprice_state.json"
@@ -49,11 +52,11 @@ class Config:
     battery_price_corridor_ct: float = 0.8
 
     # --- Battery efficiency (for battery-to-EV calculation) ---
-    battery_charge_efficiency: float = 0.92   # AC→DC charge efficiency
-    battery_discharge_efficiency: float = 0.92  # DC→AC discharge efficiency
-    battery_to_ev_min_profit_ct: float = 3.0  # Min price difference to justify battery→EV
-    battery_to_ev_dynamic_limit: bool = True  # Dynamically adjust bufferSoc/prioritySoc
-    battery_to_ev_floor_soc: int = 20  # Never discharge below this % for EV support
+    battery_charge_efficiency: float = 0.92
+    battery_discharge_efficiency: float = 0.92
+    battery_to_ev_min_profit_ct: float = 3.0
+    battery_to_ev_dynamic_limit: bool = True
+    battery_to_ev_floor_soc: int = 20
 
     # --- EV charging ---
     ev_max_price_ct: float = 30.0
@@ -87,30 +90,28 @@ class Config:
     vehicle_poll_interval_minutes: int = 60
     vehicle_providers: List[Dict] = field(default_factory=list)
 
+    # --- v5: Quiet Hours (no EV plug-switching during night) ---
+    quiet_hours_enabled: bool = True
+    quiet_hours_start: int = 21   # 21:00
+    quiet_hours_end: int = 6      # 06:00
+
+    # --- v5: Charge Sequencer ---
+    sequencer_enabled: bool = True
+    sequencer_default_charge_power_kw: float = 11.0
+
     # --- Web server ---
     api_port: int = 8099
 
 
 def _load_vehicle_providers() -> List[Dict]:
-    """Load vehicle provider configs from /config/vehicles.yaml.
-    
-    Supports evcc-compatible YAML format. Field mapping:
-        evcc 'name'     → internal 'evcc_name'  (vehicle reference name)
-        evcc 'template' → internal 'type'       (provider: kia, renault, custom, manual)
-        evcc 'capacity' → internal 'capacity_kwh'
-    
-    Fields unknown to Smartload are kept but ignored, so the same
-    vehicles.yaml can be used for both evcc and Smartload.
-    """
+    """Load vehicle provider configs from /config/vehicles.yaml."""
     path = Path(VEHICLES_YAML_PATH)
     if not path.exists():
-        # Copy example to /config/ on first run
         example = Path(VEHICLES_EXAMPLE_PATH)
         if example.exists():
             import shutil
             shutil.copy2(example, path)
             log("info", f"Created {VEHICLES_YAML_PATH} from example template")
-            log("info", "  Edit this file in HA File Editor to configure your vehicles")
         else:
             log("info", f"No {VEHICLES_YAML_PATH} found — no direct vehicle APIs configured")
             return []
@@ -120,29 +121,20 @@ def _load_vehicle_providers() -> List[Dict]:
         with open(path, "r") as f:
             data = yaml.safe_load(f) or {}
         raw_vehicles = data.get("vehicles", []) or []
-        
+
         providers = []
         for v in raw_vehicles:
-            # Map evcc field names → Smartload internal names
-            mapped = dict(v)  # keep all original fields
-            
-            # name → evcc_name (evcc uses 'name' as vehicle reference)
+            mapped = dict(v)
             if "name" in mapped and "evcc_name" not in mapped:
                 mapped["evcc_name"] = mapped["name"]
-            
-            # template → type (evcc uses 'template: kia', we use 'type: kia')
             if "template" in mapped and "type" not in mapped:
                 mapped["type"] = mapped["template"]
             elif "type" in mapped and mapped["type"] == "template" and "template" in mapped:
-                # evcc style: type: template + template: kia → type: kia
                 mapped["type"] = mapped["template"]
-            
-            # capacity → capacity_kwh (evcc uses 'capacity' in kWh)
             if "capacity" in mapped and "capacity_kwh" not in mapped:
                 mapped["capacity_kwh"] = mapped["capacity"]
-            
             providers.append(mapped)
-        
+
         if providers:
             log("info", f"Loaded {len(providers)} vehicle(s) from {VEHICLES_YAML_PATH}")
             for p in providers:
@@ -168,9 +160,7 @@ def load_config() -> Config:
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
 
-        # Load vehicle providers from external YAML
         cfg.vehicle_providers = _load_vehicle_providers()
-
         return cfg
     except Exception as e:
         log("warning", f"Could not load config: {e}, using defaults")

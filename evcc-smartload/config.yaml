@@ -1,7 +1,7 @@
 name: "EVCC-Smartload - Hybrid Optimizer"
 slug: evcc_smartload
-version: "4.3.11"
-description: "Hybrid LP+RL Optimizer · Batterie→EV Entladung · Decision-Log · SVG-Chart · Dynamische bufferSoc · Solar-Prognose"
+version: "5.0.0"
+description: "Hybrid LP+RL · Percentil-Thresholds · Charge-Sequencer · Telegram-Notifications · Quiet Hours · Batterie→EV"
 url: "https://github.com/Krinco1/HA_Addon_EVCC-Smartload"
 arch:
   - aarch64
@@ -41,6 +41,9 @@ options:
   rl_fallback_threshold: 0.7
   rl_ready_min_comparisons: 200
   vehicle_poll_interval_minutes: 60
+  quiet_hours_enabled: true
+  quiet_hours_start: 21
+  quiet_hours_end: 6
 schema:
   evcc_url: str
   evcc_password: password?
@@ -65,3 +68,6 @@ schema:
   rl_fallback_threshold: float
   rl_ready_min_comparisons: int
   vehicle_poll_interval_minutes: int
+  quiet_hours_enabled: bool?
+  quiet_hours_start: int?
+  quiet_hours_end: int?
