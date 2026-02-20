@@ -1,6 +1,6 @@
 # Changelog
 
-## v4.3.10 (2026-02-20)
+## v4.3.11 (2026-02-20)
 
 ### 🎯 Ladeplanung-Fix, Wallbox-Erkennung, System-Entscheidungen
 

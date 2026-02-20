@@ -1,7 +1,7 @@
 name: "EVCC-Smartload - Hybrid Optimizer"
 slug: evcc_smartload
-version: "4.3.10"
-description: "Hybrid LP+RL Optimizer · Batterie→EV Entladung · Dynamische bufferSoc · Solar-Prognose · Mobile Dashboard"
+version: "4.3.11"
+description: "Hybrid LP+RL Optimizer · Batterie→EV Entladung · Decision-Log · SVG-Chart · Dynamische bufferSoc · Solar-Prognose"
 url: "https://github.com/Krinco1/HA_Addon_EVCC-Smartload"
 arch:
   - aarch64
