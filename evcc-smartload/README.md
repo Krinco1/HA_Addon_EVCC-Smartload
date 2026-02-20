@@ -81,7 +81,7 @@ drivers:
 | Methode | Endpoint | Beschreibung |
 |---|---|---|
 | GET | `/` | Dashboard (HTML) |
-| GET | `/health` | Heartbeat — `{"status":"ok","version":"5.0.0"}` |
+| GET | `/health` | Heartbeat — `{"status":"ok","version":"5.0.1"}` |
 | GET | `/status` | Vollständiger System-Status inkl. Percentile, RL-Reife |
 | GET | `/summary` | Kompakte Übersicht für externe Integrationen |
 | GET | `/config` | Aktive Konfiguration (read-only) |
