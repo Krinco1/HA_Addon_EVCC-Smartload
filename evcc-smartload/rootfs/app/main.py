@@ -1,5 +1,5 @@
 """
-EVCC-Smartload v4.3.9 – Hybrid LP + Shadow RL Optimizer
+EVCC-Smartload v4.3.10 – Hybrid LP + Shadow RL Optimizer
 
 Entry point. Initialises all components and runs the main decision loop.
 """
@@ -13,6 +13,7 @@ from config import load_config
 from evcc_client import EvccClient
 from influxdb_client import InfluxDBClient
 from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh
+from decision_log import DecisionLog, log_main_cycle
 from optimizer import HolisticOptimizer, EventDetector
 from rl_agent import DQNAgent
 from comparator import Comparator, RLDeviceController
@@ -70,8 +71,11 @@ def main():
     collector.start_background_collection()
     vehicle_monitor.start_polling()
 
+    decision_log = DecisionLog(max_entries=100)
+
     web = WebServer(cfg, optimizer, rl_agent, comparator, event_detector,
-                    collector, vehicle_monitor, rl_devices, manual_store)
+                    collector, vehicle_monitor, rl_devices, manual_store,
+                    decision_log=decision_log)
     web.start()
 
     # --- Main decision loop ---
@@ -201,6 +205,13 @@ def main():
             ei = "🟢" if ev_mode == "rl" else "🔵"
             log("info", f"{bi}Bat={lp_action.battery_action}({bl}) {ei}EV={lp_action.ev_action}({el}) "
                         f"price={state.current_price * 100:.1f}ct ε={rl_agent.epsilon:.3f}")
+
+            # Decision log (what the system sees, plans, does)
+            try:
+                log_main_cycle(decision_log, state, cfg, all_vehicles,
+                               lp_action, rl_action, comparator, tariffs, solar_forecast)
+            except Exception as e:
+                log("debug", f"Decision log error: {e}")
 
             # Periodic save
             if rl_agent.total_steps % 50 == 0 and rl_agent.total_steps > 0:

@@ -1,5 +1,5 @@
 /**
- * EVCC-Smartload Dashboard v4.3.9
+ * EVCC-Smartload Dashboard v4.3.10
  *
  * Fetches /status, /slots, /vehicles, /strategy, /chart-data, /rl-devices
  * Auto-refreshes every 60 seconds.
@@ -44,13 +44,14 @@ async function fetchJSON(url) {
 
 // ---- Main refresh ----
 async function refresh() {
-    const [status, slots, vehicles, strategy, chartData, rlDevices] = await Promise.all([
+    const [status, slots, vehicles, strategy, chartData, rlDevices, decisions] = await Promise.all([
         fetchJSON('/status'),
         fetchJSON('/slots'),
         fetchJSON('/vehicles'),
         fetchJSON('/strategy'),
         fetchJSON('/chart-data'),
         fetchJSON('/rl-devices'),
+        fetchJSON('/decisions'),
     ]);
     if (status) renderStatus(status);
     if (strategy) renderStrategy(strategy);
@@ -60,6 +61,7 @@ async function refresh() {
     if (status) renderRL(status);
     if (rlDevices) renderRLDevices(rlDevices);
     if (status) renderConfig(status);
+    if (decisions) renderDecisions(decisions);
 }
 
 // ---- Status cards ----
@@ -399,6 +401,16 @@ function renderDevice(dev, deviceId, vehicleInfo) {
         var pollColor = pollAge.includes('gerade') ? '#00ff88' : '#ffaa00';
         h += ' <span style="margin-left:10px;font-size:0.85em;color:' + pollColor + ';">\u{1F4E1} ' + pollAge + '</span>';
     }
+    // Connection status
+    var isConnected = dev.connected || false;
+    var isCharging = dev.charging || false;
+    if (deviceId !== 'battery') {
+        if (isCharging) {
+            h += ' <span style="margin-left:8px;font-size:0.85em;color:#00ff88;">\u26A1 Lädt</span>';
+        } else if (isConnected) {
+            h += ' <span style="margin-left:8px;font-size:0.85em;color:#00d4ff;">\u{1F50C} Verbunden</span>';
+        }
+    }
     if (isManual) h += ' <span class="manual-badge">\u270F\uFE0F manuell: ' + vehicleInfo.manual_soc.toFixed(0) + '%</span>';
     h += '</div><div class="device-status">' + statusText + '</div></div>';
 
@@ -572,6 +584,68 @@ async function submitManualSoc() {
 
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeModal(); });
 $('manualSocModal').addEventListener('click', function(e) { if (e.target === $('manualSocModal')) closeModal(); });
+
+// ---- Decision Log ----
+function renderDecisions(data) {
+    var el = $('decisionLog');
+    var countEl = $('decisionCount');
+    if (!el || !data) return;
+
+    var entries = data.entries || [];
+    if (!entries.length) {
+        el.innerHTML = '<div style="color:#888;padding:10px;">Noch keine Entscheidungen aufgezeichnet...</div>';
+        return;
+    }
+
+    countEl.textContent = '(' + entries.length + ' Einträge)';
+
+    var categoryColors = {
+        'observe': '#888',
+        'plan': '#00d4ff',
+        'action': '#00ff88',
+        'warning': '#ffaa00',
+        'rl': '#ff88ff'
+    };
+
+    var categoryLabels = {
+        'observe': 'SEHE',
+        'plan': 'PLANE',
+        'action': 'AKTION',
+        'warning': 'WARNUNG',
+        'rl': 'RL'
+    };
+
+    var html = '';
+    var lastTime = '';
+    for (var i = entries.length - 1; i >= 0; i--) {
+        var e = entries[i];
+        var color = categoryColors[e.category] || '#888';
+        var label = categoryLabels[e.category] || e.category;
+        var time = e.ts_local || '';
+
+        // Group separator when timestamp changes (new cycle)
+        if (lastTime && time !== lastTime && e.category === 'observe' && i < entries.length - 1) {
+            html += '<div style="border-top:1px solid #333;margin:6px 0;"></div>';
+        }
+
+        html += '<div style="color:' + color + ';">';
+        html += '<span style="color:#555;">' + time + '</span> ';
+        html += '<span style="background:' + color + '22;padding:1px 5px;border-radius:3px;font-size:0.85em;">' + label + '</span> ';
+        html += e.icon + ' ' + escapeHtml(e.text);
+        if (e.details) {
+            html += ' <span style="color:#555;font-size:0.85em;">(' + escapeHtml(e.details) + ')</span>';
+        }
+        html += '</div>';
+        lastTime = time;
+    }
+
+    el.innerHTML = html;
+}
+
+function escapeHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 refresh();
 setInterval(refresh, 60000);

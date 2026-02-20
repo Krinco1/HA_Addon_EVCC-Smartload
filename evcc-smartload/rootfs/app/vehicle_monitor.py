@@ -151,13 +151,18 @@ class VehicleMonitor:
 
     def _merge_evcc_data(self, evcc_state: Dict, now: datetime):
         """Merge data from evcc /api/state into our vehicle store."""
+        # Build connected map from loadpoints (case-insensitive)
         connected = {}
+        connected_lower = {}  # lowercase keys for case-insensitive matching
         for lp in evcc_state.get("loadpoints", []):
             if lp.get("connected") and lp.get("vehicleName"):
-                connected[lp["vehicleName"]] = {
+                vname = lp["vehicleName"]
+                entry = {
                     "soc": lp.get("vehicleSoc", 0),
                     "charging": lp.get("charging", False),
                 }
+                connected[vname] = entry
+                connected_lower[vname.lower()] = entry
 
         # Build case-insensitive lookup for existing vehicle names
         existing_lower = {k.lower(): k for k in self.vehicles}
@@ -167,17 +172,23 @@ class VehicleMonitor:
             canonical = existing_lower.get(name.lower(), name)
 
             existing = self.vehicles.get(canonical)
-            # Don't overwrite direct_api data
+            # Check if connected (case-insensitive)
+            is_connected = name.lower() in connected_lower
+            conn_data = connected_lower.get(name.lower(), {})
+
+            # Don't overwrite direct_api SoC data, but DO update connection status + timestamps
             if existing and existing.data_source == "direct_api" and existing.soc > 0:
                 existing.last_poll = now  # We polled successfully, just kept old data
-                if name in connected:
-                    existing.connected_to_wallbox = True
-                    existing.charging = connected[name].get("charging", False)
+                existing.connected_to_wallbox = is_connected
+                existing.charging = conn_data.get("charging", False)
+                if is_connected:
+                    # If connected to wallbox, evcc has fresh data → update timestamp
+                    existing.last_update = now
                 continue
 
             soc = data.get("soc", 0)
-            if soc == 0 and name in connected:
-                soc = connected[name].get("soc", 0)
+            if soc == 0 and is_connected:
+                soc = conn_data.get("soc", 0)
 
             capacity = data.get("capacity", 0) or _guess_capacity(name, self.cfg.ev_default_energy_kwh)
 
@@ -188,8 +199,8 @@ class VehicleMonitor:
                 range_km=data.get("range", 0),
                 last_update=now,
                 last_poll=now,
-                connected_to_wallbox=name in connected,
-                charging=connected.get(name, {}).get("charging", False),
+                connected_to_wallbox=is_connected,
+                charging=conn_data.get("charging", False),
                 data_source="evcc",
                 provider_type="evcc",
             )

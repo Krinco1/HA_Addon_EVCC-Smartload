@@ -217,6 +217,12 @@
         <div id="rlDevices" style="margin-top: 12px;"></div>
     </div>
 
+    <!-- Decision Log -->
+    <div class="device-card" id="decisionLogCard">
+        <h3 style="margin-bottom: 8px;">🧠 System-Entscheidungen <span style="font-size:0.7em;color:#888;font-weight:normal;" id="decisionCount"></span></h3>
+        <div id="decisionLog" style="max-height: 350px; overflow-y: auto; font-family: monospace; font-size: 0.82em; line-height: 1.7;"></div>
+    </div>
+
     <!-- Config -->
     <div class="device-card">
         <h3 style="margin-bottom: 8px;">⚙️ Konfiguration</h3>
@@ -226,7 +232,8 @@
     <div class="links">
         <a href="/docs" style="font-weight: bold;">📚 Dokumentation</a><br><br>
         API: <a href="/status">/status</a> | <a href="/slots">/slots</a> | <a href="/vehicles">/vehicles</a> |
-        <a href="/rl-devices">/rl-devices</a> | <a href="/chart-data">/chart-data</a> | <a href="/strategy">/strategy</a>
+        <a href="/rl-devices">/rl-devices</a> | <a href="/chart-data">/chart-data</a> | <a href="/strategy">/strategy</a> |
+        <a href="/decisions">/decisions</a>
         <br>Auto-refresh alle 60 Sekunden
     </div>
 </div>

@@ -1,5 +1,35 @@
 # Changelog
 
+## v4.3.10 (2026-02-20)
+
+### 🎯 Ladeplanung-Fix, Wallbox-Erkennung, System-Entscheidungen
+
+**🔴 KRITISCH: Ladeplanung war komplett deaktiviert (Solar-Einheiten-Bug):**
+- Root cause: evcc liefert Solar-Prognose in WATT, Code interpretierte als kW
+- Folge: `pv_energy_forecast_kwh = 60.000 "kWh"` → `pv_per_vehicle = 14.000 kWh`
+- Jeder EV-Bedarf wurde von PV-Offset "aufgefressen" → `net_need = 0` → "Kein Ladebedarf"
+- Fix: Auto-Erkennung W vs kW (Median > 100 → Watt) in ALLEN drei Code-Pfaden:
+  1. `_calculate_charge_slots()` (Ladeplanung)
+  2. `_api_chart_data()` (Solar-Prognose im Chart)
+  3. `calc_solar_surplus_kwh()` (Battery→EV, bereits in v4.3.9)
+- Zusätzlich: Sanity-Cap `pv_energy_forecast_kwh ≤ 50 kWh`, `pv_per_vehicle ≤ 100 kWh`
+
+**🔌 Wallbox-Erkennung verbessert:**
+- Case-insensitive Matching für evcc Loadpoint-Daten (connected_lower dict)
+- Wenn am Wallbox: last_update wird aktualisiert → keine "Daten veraltet" Warnung
+- Dashboard zeigt: ⚡ Lädt / 🔌 Verbunden neben Fahrzeug-Name
+- Stale-Warning nur wenn NICHT am Wallbox verbunden
+
+**🧠 System-Entscheidungen (Decision Log):**
+- Neues Dashboard-Panel: Transparentes Log aller System-Entscheidungen
+- Zeigt pro Zyklus: SEHE (Beobachtungen) → PLANE (Entscheidungen) → AKTION (Ausführung)
+- Farbcodiert: grau=Beobachtung, blau=Planung, grün=Aktion, gelb=Warnung, lila=RL
+- Neues Modul `decision_log.py` mit ring buffer (100 Einträge)
+- Neuer API-Endpoint `/decisions` für Dashboard und Debugging
+- Zeigt RL-Entscheidungen transparent: RL aktiv/inaktiv, Win-Rate, Abweichungen von LP
+
+---
+
 ## v4.3.9 (2026-02-15)
 
 ### 🐛 Solar-Berechnung, ORA-Duplikat, 0%-SoC Filter

@@ -33,7 +33,7 @@ class WebServer:
 
     def __init__(self, cfg: Config, optimizer, rl_agent, comparator,
                  event_detector, collector, vehicle_monitor, rl_devices,
-                 manual_store: ManualSocStore):
+                 manual_store: ManualSocStore, decision_log=None):
         self.cfg = cfg
         self.lp = optimizer
         self.rl = rl_agent
@@ -43,6 +43,7 @@ class WebServer:
         self.vehicle_monitor = vehicle_monitor
         self.rl_devices = rl_devices
         self.manual_store = manual_store
+        self.decision_log = decision_log
 
         self._last_state: Optional[SystemState] = None
         self._last_lp_action: Optional[Action] = None
@@ -116,6 +117,15 @@ class WebServer:
 
                 elif path == "/strategy":
                     self._json(srv._api_strategy())
+
+                elif path == "/decisions":
+                    if srv.decision_log:
+                        self._json({
+                            "entries": srv.decision_log.get_recent(40),
+                            "cycle": srv.decision_log.get_last_cycle_summary(),
+                        })
+                    else:
+                        self._json({"entries": [], "cycle": {}})
 
                 elif path == "/chart-data":
                     tariffs = srv.collector.evcc.get_tariff_grid()
@@ -442,10 +452,19 @@ class WebServer:
         # Parse solar forecast into hourly kW values
         solar_by_hour = {}
         if solar_forecast:
+            # Detect unit: W vs kW
+            raw_vals = [float(t.get("value", 0)) for t in solar_forecast
+                        if float(t.get("value", 0)) > 0]
+            unit_factor = 1.0
+            if raw_vals:
+                median_val = sorted(raw_vals)[len(raw_vals) // 2]
+                if median_val > 100:
+                    unit_factor = 0.001  # W → kW
+
             for t in solar_forecast:
                 try:
                     s = t.get("start", "")
-                    val = float(t.get("value", 0))  # kW (evcc solar tariff = kW forecast)
+                    val = float(t.get("value", 0)) * unit_factor  # ensure kW
                     if s.endswith("Z"):
                         start = datetime.fromisoformat(s.replace("Z", "+00:00"))
                     elif "+" in s:
@@ -503,7 +522,7 @@ class WebServer:
 </style></head><body><div class="c">
 <h1>📚 EVCC-Smartload v{VERSION} Dokumentation</h1>
 <a href="/docs/readme"><div class="card"><h2>📖 README</h2><p>Installation, Konfiguration, Features, API, FAQ</p></div></a>
-<a href="/docs/changelog"><div class="card"><h2>📝 Changelog v4.3.9</h2><p>Was ist neu? Breaking Changes, neue Features</p></div></a>
+<a href="/docs/changelog"><div class="card"><h2>📝 Changelog v4.3.10</h2><p>Was ist neu? Breaking Changes, neue Features</p></div></a>
 <a href="/docs/api"><div class="card"><h2>🔌 API Referenz</h2><p>Alle Endpunkte mit Beispielen</p></div></a>
 <p style="text-align:center;margin-top:30px;"><a href="/">← Dashboard</a></p>
 </div></body></html>"""
@@ -617,10 +636,16 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
     # Parse real solar forecast from evcc
     solar_hourly_kw = {}
     if solar_forecast:
+        # Detect unit: collect raw values to check if they're in W or kW
+        raw_vals = []
+        parsed_entries = []
         for t in solar_forecast:
             try:
                 s = t.get("start", "")
                 val = float(t.get("value", 0))
+                if val <= 0:
+                    continue
+                raw_vals.append(val)
                 if s.endswith("Z"):
                     start = datetime.fromisoformat(s.replace("Z", "+00:00"))
                 elif "+" in s:
@@ -629,13 +654,27 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
                     start = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
                 hour = start.replace(minute=0, second=0, microsecond=0)
                 if hour >= now:
-                    solar_hourly_kw[hour] = max(solar_hourly_kw.get(hour, 0), val)
+                    parsed_entries.append((hour, val))
             except Exception:
                 continue
+
+        # Auto-detect Watts vs kW: if median > 100, values are in Watts
+        unit_factor = 1.0
+        if raw_vals:
+            median_val = sorted(raw_vals)[len(raw_vals) // 2]
+            if median_val > 100:
+                unit_factor = 0.001  # W → kW
+                log("debug", f"Solar forecast unit: Watts (median={median_val:.0f}), converting to kW")
+
+        for hour, val in parsed_entries:
+            val_kw = val * unit_factor
+            solar_hourly_kw[hour] = max(solar_hourly_kw.get(hour, 0), val_kw)
 
     if solar_hourly_kw:
         # Real forecast: sum surplus (solar - home estimate) for remaining hours
         pv_energy_forecast_kwh = sum(max(0, kw - home_now_kw) for kw in solar_hourly_kw.values())
+        # Sanity cap: max 50 kWh per day for residential
+        pv_energy_forecast_kwh = min(pv_energy_forecast_kwh, 50.0)
         forecast_source = "evcc"
     else:
         # Fallback: crude estimate from current PV
@@ -671,6 +710,8 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
     n_charging_vehicles = sum(1 for v in vehicles.values()
                               if v.get_effective_soc() < cfg.ev_target_soc)
     pv_per_vehicle = pv_for_vehicles / max(1, n_charging_vehicles)
+    # Cap per-vehicle PV offset to max capacity (sanity check)
+    pv_per_vehicle = min(pv_per_vehicle, 100)
 
     for name, v in vehicles.items():
         needs_charge = v.get_effective_soc() < cfg.ev_target_soc
@@ -685,8 +726,11 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
         result["vehicles"][name]["last_poll"] = v.last_poll.isoformat() if v.last_poll else None
         result["vehicles"][name]["poll_age"] = v.get_poll_age_string()
         result["vehicles"][name]["data_age"] = v.get_data_age_string()
-        result["vehicles"][name]["is_stale"] = v.is_data_stale()
+        # Not stale if connected to wallbox (evcc has live data)
+        result["vehicles"][name]["is_stale"] = v.is_data_stale() and not v.connected_to_wallbox
         result["vehicles"][name]["data_source"] = v.data_source
+        result["vehicles"][name]["connected"] = v.connected_to_wallbox
+        result["vehicles"][name]["charging"] = v.charging
 
     # --- Battery-to-EV optimization ---
     # Calculate if discharging battery to charge EVs is cheaper than grid
