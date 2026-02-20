@@ -1,380 +1,219 @@
 """
-Vehicle monitoring and data collection.
+Vehicle Monitor and Data Collector — v4 unchanged in v5.
 
-VehicleMonitor: polls vehicle APIs and evcc for SoC data, manages manual overrides.
-DataCollector: reads evcc state and writes to InfluxDB.
+VehicleMonitor:
+  - Manages vehicle state, handles polling schedule
+  - Exposes get_all_vehicles(), predict_charge_need(), trigger_refresh()
+
+DataCollector:
+  - Collects system state from evcc + vehicles
+  - Runs background collection thread
+  - Exposes get_current_state() → SystemState
 """
 
 import threading
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
-from urllib.parse import urlparse
+from datetime import datetime, timezone
+from typing import Dict, Optional
 
 from config import Config
-from evcc_client import EvccClient
-from influxdb_client import InfluxDBClient
 from logging_util import log
-from state import ManualSocStore, SystemState, VehicleStatus
+from state import ManualSocStore, SystemState
+from vehicles.manager import VehicleManager
+from vehicles.base import VehicleData
 
-# Conditional import for the modular vehicle provider system
-try:
-    from vehicles import VehicleManager
-    HAS_VEHICLE_MODULE = True
-except ImportError:
-    HAS_VEHICLE_MODULE = False
-    VehicleManager = None  # type: ignore
-
-
-# =============================================================================
-# Known vehicle capacities (fallback database)
-# =============================================================================
-
-KNOWN_CAPACITIES = {
-    "kiaev9": 99.8, "kia_ev9": 99.8, "ev9": 99.8,
-    "twingo": 22.0, "renaulttwingo": 22.0,
-    "ora03": 63.0, "ora": 63.0, "gwmora": 63.0,
-    "teslamodel3": 60.0, "model3": 60.0,
-    "teslamodely": 75.0, "modely": 75.0,
-    "id3": 58.0, "id4": 77.0,
-    "ioniq5": 77.4, "ioniq6": 77.4,
-    "ev6": 77.4, "niro": 64.8,
-}
-
-
-def _guess_capacity(name: str, default: float) -> float:
-    n = name.lower().replace(" ", "").replace("_", "").replace("-", "")
-    for key, cap in KNOWN_CAPACITIES.items():
-        if key in n:
-            return cap
-    return default
-
-
-# =============================================================================
-# Vehicle Monitor
-# =============================================================================
 
 class VehicleMonitor:
-    """
-    Monitors all configured vehicles.
+    """Manages vehicle state and coordinates API polling."""
 
-    Data sources (in priority order):
-      1. Direct vehicle API (KIA Connect, Renault API) via VehicleManager
-      2. Manual SoC input via ManualSocStore
-      3. evcc API (only when vehicle is physically connected to loadpoint)
-    """
-
-    def __init__(self, evcc: EvccClient, cfg: Config, manual_store: ManualSocStore):
+    def __init__(self, evcc, cfg: Config, manual_store: ManualSocStore):
         self.evcc = evcc
         self.cfg = cfg
-        self.vehicles: Dict[str, VehicleStatus] = {}
         self.manual_store = manual_store
-        self.poll_interval_minutes = cfg.vehicle_poll_interval_minutes
-        self._running = False
-        self._vehicle_manager: Optional[VehicleManager] = None
-        self._init_vehicle_manager()
-
-    def _init_vehicle_manager(self):
-        if not HAS_VEHICLE_MODULE or not self.cfg.vehicle_providers:
-            return
-        try:
-            parsed = urlparse(self.cfg.evcc_url)
-            evcc_host = parsed.hostname or "192.168.1.66"
-            evcc_port = parsed.port or 7070
-            vm_cfg = {
-                "poll_interval_minutes": self.poll_interval_minutes,
-                "providers": self.cfg.vehicle_providers,
-            }
-            self._vehicle_manager = VehicleManager(vm_cfg, evcc_host, evcc_port)
-            log("info", f"VehicleManager initialised with {len(self.cfg.vehicle_providers)} providers")
-        except Exception as e:
-            log("error", f"Failed to init VehicleManager: {e}")
-
-    # ------------------------------------------------------------------
-    # Polling
-    # ------------------------------------------------------------------
+        self._manager = VehicleManager(cfg.vehicle_providers)
+        self._lock = threading.Lock()
+        self._refresh_requested: set = set()
+        self._poll_interval_sec = cfg.vehicle_poll_interval_minutes * 60
+        self._last_poll: Dict[str, float] = {}
+        self._thread: Optional[threading.Thread] = None
 
     def start_polling(self):
-        self._running = True
-        if self._vehicle_manager:
-            self._vehicle_manager.start_polling()
+        """Start background vehicle polling thread."""
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+        log("info", f"VehicleMonitor: polling every {self.cfg.vehicle_poll_interval_minutes}min")
 
-        def loop():
-            time.sleep(2)
-            self._poll_vehicles()
-            while self._running:
-                try:
-                    self._poll_vehicles()
-                except Exception as e:
-                    log("error", f"Vehicle polling error: {e}")
-                time.sleep(60)
-
-        threading.Thread(target=loop, daemon=True).start()
-        log("info", f"Vehicle monitor started (every {self.poll_interval_minutes}min)")
-
-    def _poll_vehicles(self):
-        now = datetime.now(timezone.utc)
-
-        # 1. Data from modular VehicleManager
-        if self._vehicle_manager:
+    def _poll_loop(self):
+        """Background loop: poll each vehicle on its schedule or when refresh requested."""
+        while True:
             try:
-                for name, vs in self._vehicle_manager.get_all_vehicles().items():
-                    if vs.has_valid_soc:
-                        old = self.vehicles.get(name)
-                        self.vehicles[name] = VehicleStatus(
-                            name=name,
-                            soc=vs.soc or 0,
-                            capacity_kwh=vs.capacity_kwh,
-                            range_km=vs.data.range_km if vs.data else 0,
-                            last_update=vs.data.timestamp if vs.data else now,
-                            last_poll=now,
-                            connected_to_wallbox=vs.evcc_connected,
-                            charging=vs.data.is_charging if vs.data else False,
-                            data_source=vs.data_source,
-                            provider_type=vs.provider_type,
-                        )
-                        if old and abs(old.soc - vs.soc) > 2:
-                            log("info", f"🔋 {name}: SoC {old.soc}% → {vs.soc}% (via {vs.data_source})")
+                now = time.time()
+                names = self._manager.get_pollable_names()
+
+                with self._lock:
+                    refresh_now = set(self._refresh_requested)
+                    self._refresh_requested.clear()
+
+                for name in names:
+                    last = self._last_poll.get(name, 0)
+                    if name in refresh_now or (now - last) >= self._poll_interval_sec:
+                        log("debug", f"VehicleMonitor: polling {name}")
+                        result = self._manager.poll_vehicle(name)
+                        self._last_poll[name] = time.time()
+                        if result:
+                            # Apply manual SoC override if present
+                            manual = self.manual_store.get(name)
+                            if manual is not None:
+                                result.manual_soc = manual
+                            log("debug", f"VehicleMonitor: {name} SoC={result.get_effective_soc():.1f}%")
+
+                # Apply manual SoC overrides to all vehicles
+                for name, v in self._manager.get_all_vehicles().items():
+                    manual = self.manual_store.get(name)
+                    v.manual_soc = manual
+
             except Exception as e:
-                log("error", f"VehicleManager poll error: {e}")
+                log("error", f"VehicleMonitor poll loop error: {e}")
 
-        # 2. Merge evcc data for connected vehicles
-        evcc_state = self.evcc.get_state()
-        if evcc_state:
-            self._merge_evcc_data(evcc_state, now)
+            time.sleep(30)  # Check every 30s whether any poll is due
 
-        # 3. Apply manual SoC overrides
-        self._apply_manual_overrides()
+    def update_from_evcc(self, evcc_state: dict):
+        """Pass evcc state to vehicle manager (called by DataCollector)."""
+        try:
+            self._manager.update_from_evcc(evcc_state)
+            # Re-apply manual SoC overrides
+            for name, v in self._manager.get_all_vehicles().items():
+                manual = self.manual_store.get(name)
+                v.manual_soc = manual
+        except Exception as e:
+            log("error", f"VehicleMonitor update_from_evcc error: {e}")
 
-        log("debug", f"Polled {len(self.vehicles)} vehicles: " +
-            ", ".join(f"{v.name}:{v.get_effective_soc():.0f}%({v.data_source})" for v in self.vehicles.values()))
-
-    def _merge_evcc_data(self, evcc_state: Dict, now: datetime):
-        """Merge data from evcc /api/state into our vehicle store."""
-        # Build connected map from loadpoints (case-insensitive)
-        connected = {}
-        connected_lower = {}  # lowercase keys for case-insensitive matching
-        for lp in evcc_state.get("loadpoints", []):
-            if lp.get("connected") and lp.get("vehicleName"):
-                vname = lp["vehicleName"]
-                entry = {
-                    "soc": lp.get("vehicleSoc", 0),
-                    "charging": lp.get("charging", False),
-                }
-                connected[vname] = entry
-                connected_lower[vname.lower()] = entry
-
-        # Build case-insensitive lookup for existing vehicle names
-        existing_lower = {k.lower(): k for k in self.vehicles}
-
-        for name, data in evcc_state.get("vehicles", {}).items():
-            # Use existing name if only case differs (e.g. evcc "ora_03" → our "ORA_03")
-            canonical = existing_lower.get(name.lower(), name)
-
-            existing = self.vehicles.get(canonical)
-            # Check if connected (case-insensitive)
-            is_connected = name.lower() in connected_lower
-            conn_data = connected_lower.get(name.lower(), {})
-
-            # Don't overwrite direct_api SoC data, but DO update connection status + timestamps
-            if existing and existing.data_source == "direct_api" and existing.soc > 0:
-                existing.last_poll = now  # We polled successfully, just kept old data
-                existing.connected_to_wallbox = is_connected
-                existing.charging = conn_data.get("charging", False)
-                if is_connected:
-                    # If connected to wallbox, evcc has fresh data → update timestamp
-                    existing.last_update = now
-                continue
-
-            soc = data.get("soc", 0)
-            if soc == 0 and is_connected:
-                soc = conn_data.get("soc", 0)
-
-            capacity = data.get("capacity", 0) or _guess_capacity(name, self.cfg.ev_default_energy_kwh)
-
-            self.vehicles[canonical] = VehicleStatus(
-                name=canonical,
-                soc=soc,
-                capacity_kwh=capacity,
-                range_km=data.get("range", 0),
-                last_update=now,
-                last_poll=now,
-                connected_to_wallbox=is_connected,
-                charging=conn_data.get("charging", False),
-                data_source="evcc",
-                provider_type="evcc",
-            )
-
-    def _apply_manual_overrides(self):
-        """Apply manually entered SoC values from the ManualSocStore."""
-        for name, entry in self.manual_store.get_all().items():
-            soc = entry.get("soc")
-            ts_str = entry.get("timestamp")
-            if soc is None:
-                continue
-            ts = datetime.fromisoformat(ts_str) if ts_str else datetime.now(timezone.utc)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-
-            if name in self.vehicles:
-                v = self.vehicles[name]
-                v.manual_soc = soc
-                v.manual_soc_timestamp = ts
-            else:
-                # Vehicle not yet known from any source – create entry
-                cap = _guess_capacity(name, self.cfg.ev_default_energy_kwh)
-                self.vehicles[name] = VehicleStatus(
-                    name=name,
-                    soc=0,
-                    capacity_kwh=cap,
-                    range_km=0,
-                    last_update=ts,
-                    data_source="manual",
-                    provider_type="manual",
-                    manual_soc=soc,
-                    manual_soc_timestamp=ts,
-                )
-
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
-    def trigger_refresh(self, vehicle_name: str = None):
-        if self._vehicle_manager:
-            self._vehicle_manager.trigger_immediate_refresh(vehicle_name)
-        self._poll_vehicles()
-
-    def get_vehicle(self, name: str) -> Optional[VehicleStatus]:
-        return self.vehicles.get(name)
-
-    def get_all_vehicles(self) -> Dict[str, VehicleStatus]:
-        return self.vehicles.copy()
-
-    def get_total_charge_needed(self, target_soc: int = 80) -> float:
-        return sum(
-            max(0, (target_soc - v.get_effective_soc()) / 100 * v.capacity_kwh)
-            for v in self.vehicles.values()
-        )
+    def get_all_vehicles(self) -> Dict[str, VehicleData]:
+        """Return all configured vehicles with current data."""
+        return self._manager.get_all_vehicles()
 
     def predict_charge_need(self) -> Dict[str, float]:
+        """Estimate kWh needed to reach target SoC for each vehicle."""
         target = self.cfg.ev_target_soc
-        return {
-            name: round(max(0, (target - v.get_effective_soc()) / 100 * v.capacity_kwh), 1)
-            for name, v in self.vehicles.items()
-        }
+        result = {}
+        for name, v in self._manager.get_all_vehicles().items():
+            soc = v.get_effective_soc()
+            cap = v.capacity_kwh or self.cfg.ev_default_energy_kwh
+            need = max(0, (target - soc) / 100 * cap)
+            result[name] = round(need, 1)
+        return result
 
+    def trigger_refresh(self, vehicle_name: Optional[str] = None):
+        """Request immediate re-poll for a vehicle (or all if None)."""
+        with self._lock:
+            if vehicle_name:
+                self._refresh_requested.add(vehicle_name)
+                log("info", f"VehicleMonitor: refresh requested for {vehicle_name}")
+            else:
+                for name in self._manager.get_pollable_names():
+                    self._refresh_requested.add(name)
 
-# =============================================================================
-# Data Collector (reads evcc state → SystemState + InfluxDB)
-# =============================================================================
 
 class DataCollector:
-    """Reads evcc state and converts it to SystemState; writes to InfluxDB."""
+    """Collects system state from evcc and vehicles, runs background thread."""
 
-    def __init__(self, evcc: EvccClient, influx: InfluxDBClient, cfg: Config,
-                 vehicle_monitor: VehicleMonitor):
+    def __init__(self, evcc, influx, cfg: Config, vehicle_monitor: VehicleMonitor):
         self.evcc = evcc
         self.influx = influx
         self.cfg = cfg
         self.vehicle_monitor = vehicle_monitor
-        self._running = False
-
-    def get_current_state(self) -> Optional[SystemState]:
-        """Build SystemState from evcc + vehicle monitor data."""
-        data = self.evcc.get_state()
-        if not data:
-            return None
-
-        now = datetime.now(timezone.utc)
-
-        battery_soc = data.get("batterySoc", 0) or 0
-        battery_power = data.get("batteryPower", 0) or 0
-        grid_power = data.get("gridPower", 0) or 0
-        pv_power = data.get("pvPower", 0) or 0
-        home_power = data.get("homePower", 0) or 0
-
-        # EV from loadpoints
-        ev_connected = False
-        ev_soc = 0.0
-        ev_power = 0.0
-        ev_name = ""
-        ev_capacity = 0.0
-        ev_charge_power = 11.0
-
-        for lp in data.get("loadpoints", []):
-            if lp.get("connected"):
-                ev_connected = True
-                ev_soc = lp.get("vehicleSoc", 0) or 0
-                ev_power = lp.get("chargePower", 0) or 0
-                ev_name = lp.get("vehicleName", "")
-                ev_capacity = _guess_capacity(ev_name, self.cfg.ev_default_energy_kwh)
-                ev_charge_power = lp.get("maxCurrent", 16) * 230 * 3 / 1000  # rough
-
-                # Override SoC with vehicle monitor data if better
-                vm_vehicle = self.vehicle_monitor.get_vehicle(ev_name)
-                if vm_vehicle:
-                    eff_soc = vm_vehicle.get_effective_soc()
-                    if eff_soc > 0:
-                        ev_soc = eff_soc
-                    ev_capacity = vm_vehicle.capacity_kwh or ev_capacity
-                break
-
-        # Price
-        tariffs = data.get("tariffGrid", []) or []
-        current_price = 0.30
-        price_forecast: List[float] = []
-        if tariffs:
-            try:
-                current_price = float(tariffs[0].get("value", 0.30))
-                price_forecast = [float(t.get("value", 0)) for t in tariffs[1:7]]
-            except Exception:
-                pass
-
-        return SystemState(
-            timestamp=now,
-            battery_soc=battery_soc,
-            battery_power=battery_power,
-            grid_power=grid_power,
-            current_price=current_price,
-            pv_power=pv_power,
-            home_power=home_power,
-            ev_connected=ev_connected,
-            ev_soc=ev_soc,
-            ev_power=ev_power,
-            ev_name=ev_name,
-            ev_capacity_kwh=ev_capacity,
-            ev_charge_power_kw=ev_charge_power,
-            price_forecast=price_forecast,
-        )
+        self._state: Optional[SystemState] = None
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
 
     def start_background_collection(self):
-        self._running = True
+        """Start background data collection thread."""
+        self._thread = threading.Thread(target=self._collect_loop, daemon=True)
+        self._thread.start()
+        log("info", f"DataCollector: collecting every {self.cfg.data_collect_interval_sec}s")
 
-        def loop():
-            while self._running:
-                try:
-                    state = self.get_current_state()
-                    if state:
-                        self._write(state)
-                except Exception as e:
-                    log("error", f"Collection error: {e}")
-                time.sleep(self.cfg.data_collect_interval_sec)
+    def _collect_loop(self):
+        """Background loop: collect state at regular intervals."""
+        while True:
+            try:
+                self._collect_once()
+            except Exception as e:
+                log("error", f"DataCollector loop error: {e}")
+            time.sleep(self.cfg.data_collect_interval_sec)
 
-        threading.Thread(target=loop, daemon=True).start()
-        log("info", "Background data collection started")
+    def _collect_once(self):
+        """Single collection cycle."""
+        # Fetch evcc state
+        evcc_state = self.evcc.get_state()
+        if not evcc_state:
+            return
 
-    def _write(self, s: SystemState):
-        ns = int(s.timestamp.timestamp() * 1e9)
-        self.influx.write_batch([
-            f"energy,source=smartprice "
-            f"battery_soc={s.battery_soc},"
-            f"battery_power={s.battery_power},"
-            f"grid_power={s.grid_power},"
-            f"pv_power={s.pv_power},"
-            f"home_power={s.home_power},"
-            f"ev_connected={int(s.ev_connected)},"
-            f"ev_soc={s.ev_soc},"
-            f"ev_power={s.ev_power},"
-            f"price={s.current_price} "
-            f"{ns}"
-        ])
+        # Update vehicle monitor with evcc state
+        self.vehicle_monitor.update_from_evcc(evcc_state)
+
+        # Build SystemState
+        site = evcc_state.get("result", evcc_state)
+
+        # Battery
+        bat_soc = site.get("batterySoc", 0) or 0
+        bat_power = site.get("batteryPower", 0) or 0
+
+        # Grid / PV / Home
+        grid_power = site.get("gridPower", 0) or 0
+        pv_power = site.get("pvPower", 0) or 0
+        home_power = site.get("homePower", 0) or 0
+
+        # Tariff (current price)
+        tariff = self.evcc.get_current_tariff()
+        current_price = tariff if tariff else 0.0
+
+        # EV (connected vehicle at loadpoint)
+        ev_name = None
+        ev_soc = 0.0
+        ev_cap = 0.0
+        ev_connected = False
+
+        loadpoints = site.get("loadpoints", [])
+        for lp in loadpoints:
+            if lp.get("connected"):
+                ev_name = lp.get("vehicleName") or lp.get("vehicle")
+                ev_soc = float(lp.get("vehicleSoc", 0) or 0)
+                ev_connected = True
+                # Try to get capacity from our vehicle data
+                vehicles = self.vehicle_monitor.get_all_vehicles()
+                for vname, vdata in vehicles.items():
+                    if vname.lower() == (ev_name or "").lower():
+                        ev_cap = vdata.capacity_kwh or 0
+                        # Use best available SoC
+                        ev_soc = vdata.get_effective_soc()
+                        break
+                break
+
+        state = SystemState(
+            timestamp=datetime.now(timezone.utc),
+            battery_soc=float(bat_soc),
+            battery_power=float(bat_power),
+            pv_power=float(pv_power),
+            home_power=float(home_power),
+            grid_power=float(grid_power),
+            current_price=float(current_price),
+            ev_connected=ev_connected,
+            ev_name=ev_name,
+            ev_soc=float(ev_soc),
+            ev_capacity_kwh=float(ev_cap),
+        )
+
+        with self._lock:
+            self._state = state
+
+        # Write to InfluxDB
+        if self.influx:
+            try:
+                self.influx.write_state(state)
+            except Exception as e:
+                log("warning", f"InfluxDB write error: {e}")
+
+    def get_current_state(self) -> Optional[SystemState]:
+        """Return the most recently collected system state."""
+        with self._lock:
+            return self._state

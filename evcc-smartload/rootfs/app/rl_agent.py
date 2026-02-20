@@ -1,8 +1,11 @@
 """
-Shadow Reinforcement Learning Agent.
+Shadow Reinforcement Learning Agent — v5.0
 
-A DQN agent using a discretised Q-table that learns alongside the LP optimizer.
-Features: imitation learning from LP, prioritised replay, InfluxDB bootstrap.
+Changes from v4:
+  - Action space: 7×5 = 35 (was 4×4 = 16)
+  - State space: 31-d (was 25-d) — includes price percentiles + solar forecast
+  - Q-table reset on load if state_size mismatch (migration guard)
+  - _compute_limits() uses percentile thresholds from SystemState
 """
 
 import json
@@ -20,12 +23,10 @@ from state import Action, SystemState
 
 
 # =============================================================================
-# Replay Memory
+# Replay Memory (unchanged from v4)
 # =============================================================================
 
 class ReplayMemory:
-    """Prioritised experience replay buffer."""
-
     def __init__(self, capacity: int):
         self.capacity = capacity
         self.memory: List[Optional[Tuple]] = []
@@ -44,7 +45,9 @@ class ReplayMemory:
         n = len(self.memory)
         if n < batch_size:
             return [m for m in self.memory if m is not None]
-        probs = np.array([p for p in self.priorities[:n] if p is not None], dtype=np.float32)
+        probs = np.array(
+            [p for p in self.priorities[:n] if p is not None], dtype=np.float32
+        )
         probs /= probs.sum()
         indices = np.random.choice(n, batch_size, p=probs, replace=False)
         return [self.memory[i] for i in indices]
@@ -56,11 +59,14 @@ class ReplayMemory:
         try:
             data = {
                 "memory": [
-                    (s.tolist() if isinstance(s, np.ndarray) else s,
-                     a, r,
-                     ns.tolist() if isinstance(ns, np.ndarray) else ns,
-                     d)
-                    for s, a, r, ns, d in self.memory if s is not None
+                    (
+                        s.tolist() if isinstance(s, np.ndarray) else s,
+                        a, r,
+                        ns.tolist() if isinstance(ns, np.ndarray) else ns,
+                        d,
+                    )
+                    for s, a, r, ns, d in self.memory
+                    if s is not None
                 ],
                 "priorities": [p for p in self.priorities if p is not None],
                 "position": self.position,
@@ -74,8 +80,10 @@ class ReplayMemory:
         try:
             with open(path, "r") as f:
                 data = json.load(f)
-            self.memory = [(np.array(s), a, r, np.array(ns), d)
-                           for s, a, r, ns, d in data.get("memory", [])]
+            self.memory = [
+                (np.array(s), a, r, np.array(ns), d)
+                for s, a, r, ns, d in data.get("memory", [])
+            ]
             self.priorities = data.get("priorities", [1.0] * len(self.memory))
             self.position = data.get("position", 0)
         except Exception:
@@ -83,20 +91,20 @@ class ReplayMemory:
 
 
 # =============================================================================
-# DQN Agent
+# DQN Agent — v5
 # =============================================================================
 
 class DQNAgent:
-    """Deep Q-Network agent using a discretised Q-table."""
+    """Q-table DQN with 7-battery × 5-EV = 35 actions and 31-d state."""
 
-    N_BATTERY_ACTIONS = 4
-    N_EV_ACTIONS = 4
-    N_ACTIONS = N_BATTERY_ACTIONS * N_EV_ACTIONS
+    N_BATTERY_ACTIONS = 7
+    N_EV_ACTIONS = 5
+    N_ACTIONS = N_BATTERY_ACTIONS * N_EV_ACTIONS  # 35
+
+    STATE_SIZE = 31  # v5 extended state vector
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.state_size = 25
-
         self.q_table: Dict[Tuple, np.ndarray] = defaultdict(
             lambda: np.zeros(self.N_ACTIONS)
         )
@@ -106,20 +114,27 @@ class DQNAgent:
         self.gamma = cfg.rl_discount_factor
         self.total_steps = 0
         self.training_episodes = 0
-
         self.load()
 
     # ------------------------------------------------------------------
-    # State discretisation
+    # State discretisation (extended for 31-d)
     # ------------------------------------------------------------------
 
     def _discretize_state(self, state_vec: np.ndarray) -> Tuple:
-        bins = [5, 3, 3, 5, 3, 3, 2, 3, 3, 4, 4, 4, 4]
+        # First 13 features: same bins as v4
+        bins_13 = [5, 3, 3, 5, 3, 3, 2, 3, 3, 4, 4, 4, 4]
         discretized = []
-        for val, n_bins in zip(state_vec[:13], bins):
+        for val, n_bins in zip(state_vec[:13], bins_13):
             discretized.append(int(np.clip(val * n_bins, 0, n_bins - 1)))
+
+        # Price/PV forecast summary (features 13-24, same as v4)
         discretized.append(int(np.clip(np.mean(state_vec[13:19]) * 5, 0, 4)))
         discretized.append(int(np.clip(np.mean(state_vec[19:25]) * 3, 0, 2)))
+
+        # v5 new features (25-30): 3 bins each
+        for val in state_vec[25:31]:
+            discretized.append(int(np.clip(val * 3, 0, 2)))
+
         return tuple(discretized)
 
     def _action_to_tuple(self, idx: int) -> Tuple[int, int]:
@@ -147,19 +162,31 @@ class DQNAgent:
         return action
 
     def _compute_limits(self, action: Action, state: SystemState):
-        if action.battery_action == 1:
-            action.battery_limit_eur = min(state.current_price + 0.02, self.cfg.battery_max_price_ct / 100)
-        elif action.battery_action == 2:
-            action.battery_limit_eur = 0
-        else:
-            action.battery_limit_eur = None
+        """Map action indices to EUR/kWh thresholds using percentile context."""
+        cfg_max_bat = self.cfg.battery_max_price_ct / 100
+        cfg_max_ev = self.cfg.ev_max_price_ct / 100
 
-        if action.ev_action == 1:
-            action.ev_limit_eur = min(state.current_price + 0.02, self.cfg.ev_max_price_ct / 100)
-        elif action.ev_action == 3:
-            action.ev_limit_eur = 0
-        else:
-            action.ev_limit_eur = None
+        p = state.price_percentiles  # may be empty on first steps
+
+        bat_map = {
+            0: None,                                                  # hold
+            1: min(p.get(20, state.current_price), cfg_max_bat),     # P20
+            2: min(p.get(40, state.current_price), cfg_max_bat),     # P40
+            3: min(p.get(60, state.current_price), cfg_max_bat),     # P60
+            4: cfg_max_bat,                                           # max
+            5: 0.0,                                                   # PV only
+            6: None,                                                  # discharge
+        }
+        action.battery_limit_eur = bat_map.get(action.battery_action)
+
+        ev_map = {
+            0: None,                                                  # no charge
+            1: min(p.get(30, state.current_price), cfg_max_ev),      # P30
+            2: min(p.get(60, state.current_price), cfg_max_ev),      # P60
+            3: cfg_max_ev,                                            # max
+            4: 0.0,                                                   # PV only
+        }
+        action.ev_limit_eur = ev_map.get(action.ev_action)
 
     # ------------------------------------------------------------------
     # Learning
@@ -168,12 +195,21 @@ class DQNAgent:
     def imitation_learn(self, state: SystemState, expert_action: Action):
         state_vec = state.to_vector()
         state_key = self._discretize_state(state_vec)
-        expert_idx = self._tuple_to_action(expert_action.battery_action, expert_action.ev_action)
+        expert_idx = self._tuple_to_action(
+            expert_action.battery_action, expert_action.ev_action
+        )
         self.q_table[state_key][expert_idx] += self.learning_rate * 2
         self.total_steps += 1
 
-    def learn(self, state: SystemState, action: Action, reward: float,
-              next_state: SystemState, done: bool, priority: float = 1.0):
+    def learn(
+        self,
+        state: SystemState,
+        action: Action,
+        reward: float,
+        next_state: SystemState,
+        done: bool,
+        priority: float = 1.0,
+    ):
         state_vec = state.to_vector()
         next_vec = next_state.to_vector()
         action_idx = self._tuple_to_action(action.battery_action, action.ev_action)
@@ -186,7 +222,9 @@ class DQNAgent:
         target_q = reward if done else reward + self.gamma * np.max(self.q_table[nkey])
         self.q_table[skey][action_idx] += self.learning_rate * (target_q - current_q)
 
-        self.epsilon = max(self.cfg.rl_epsilon_min, self.epsilon * self.cfg.rl_epsilon_decay)
+        self.epsilon = max(
+            self.cfg.rl_epsilon_min, self.epsilon * self.cfg.rl_epsilon_decay
+        )
         self.total_steps += 1
 
         if len(self.memory) >= self.cfg.rl_batch_size and self.total_steps % 10 == 0:
@@ -197,47 +235,77 @@ class DQNAgent:
             sk = self._discretize_state(sv)
             nk = self._discretize_state(nsv)
             target = r if d else r + self.gamma * np.max(self.q_table[nk])
-            self.q_table[sk][ai] += self.learning_rate * 0.5 * (target - self.q_table[sk][ai])
+            self.q_table[sk][ai] += (
+                self.learning_rate * 0.5 * (target - self.q_table[sk][ai])
+            )
 
     # ------------------------------------------------------------------
-    # Persistence
+    # Persistence — with migration guard
     # ------------------------------------------------------------------
 
     def save(self):
         try:
-            q_ser = {",".join(map(str, k)): v.tolist() for k, v in self.q_table.items()}
+            q_ser = {
+                ",".join(map(str, k)): v.tolist() for k, v in self.q_table.items()
+            }
             data = {
                 "q_table": q_ser,
                 "epsilon": self.epsilon,
                 "total_steps": self.total_steps,
                 "training_episodes": self.training_episodes,
+                "state_size": self.STATE_SIZE,
+                "n_actions": self.N_ACTIONS,
                 "saved_at": datetime.now().isoformat(),
             }
             with open(RL_MODEL_PATH, "w") as f:
                 json.dump(data, f, indent=2)
             self.memory.save(RL_MEMORY_PATH)
-            log("info", f"RL model saved (steps={self.total_steps}, q_states={len(self.q_table)}, ε={self.epsilon:.3f})")
+            log(
+                "info",
+                f"RL model saved (steps={self.total_steps}, "
+                f"q_states={len(self.q_table)}, ε={self.epsilon:.3f})",
+            )
         except Exception as e:
             log("error", f"Could not save RL model: {e}")
 
     def load(self) -> bool:
         if not os.path.exists(RL_MODEL_PATH):
-            log("info", "No existing RL model found, starting fresh")
+            log("info", "No existing RL model found, starting fresh (v5 action space)")
             return False
         try:
             with open(RL_MODEL_PATH, "r") as f:
                 data = json.load(f)
+
+            # Migration guard: if saved model has different action/state size → reset
+            saved_n_actions = data.get("n_actions", 16)
+            saved_state_size = data.get("state_size", 25)
+            if saved_n_actions != self.N_ACTIONS or saved_state_size != self.STATE_SIZE:
+                log(
+                    "warning",
+                    f"RL model incompatible (actions={saved_n_actions} vs {self.N_ACTIONS}, "
+                    f"state={saved_state_size} vs {self.STATE_SIZE}) → resetting Q-table",
+                )
+                return False
+
             self.q_table = defaultdict(lambda: np.zeros(self.N_ACTIONS))
             for ks, v in data.get("q_table", {}).items():
                 try:
-                    self.q_table[tuple(map(int, ks.split(",")))] = np.array(v)
+                    key = tuple(map(int, ks.split(",")))
+                    arr = np.array(v)
+                    if len(arr) == self.N_ACTIONS:
+                        self.q_table[key] = arr
                 except Exception:
                     continue
+
             self.epsilon = data.get("epsilon", self.cfg.rl_epsilon_start)
             self.total_steps = data.get("total_steps", 0)
             self.training_episodes = data.get("training_episodes", 0)
             self.memory.load(RL_MEMORY_PATH)
-            log("info", f"✓ RL model loaded (steps={self.total_steps}, q_states={len(self.q_table)}, ε={self.epsilon:.3f})")
+            log(
+                "info",
+                f"✓ RL model loaded v5 (steps={self.total_steps}, "
+                f"q_states={len(self.q_table)}, ε={self.epsilon:.3f})",
+            )
             return True
         except Exception as e:
             log("warning", f"Could not load RL model: {e}")
@@ -255,27 +323,34 @@ class DQNAgent:
                 try:
                     battery_soc = point.get("battery_soc") or 50
                     price = point.get("price") or 0.30
-                    state_vec = np.zeros(25)
+                    state_vec = np.zeros(self.STATE_SIZE)
                     state_vec[0] = battery_soc / 100
                     state_vec[3] = price / 0.5
                     if prev:
                         delta = battery_soc - (prev.get("battery_soc") or 50)
                         prev_price = prev.get("price") or 0.30
-                        if delta > 2 and prev_price < 0.32:
-                            aidx, reward = self._tuple_to_action(1, 0), 0.5
-                        elif delta < -2 and prev_price > 0.32:
-                            aidx, reward = self._tuple_to_action(3, 0), 0.3
+                        if delta > 2 and prev_price < 0.25:
+                            # Was charging at cheap price → good
+                            aidx = self._tuple_to_action(2, 0)  # charge_p40
+                            reward = 0.5
+                        elif delta < -2 and prev_price > 0.30:
+                            aidx = self._tuple_to_action(6, 0)  # discharge
+                            reward = 0.3
                         elif delta > 2 and prev_price > 0.35:
-                            aidx, reward = self._tuple_to_action(1, 0), -0.3
+                            aidx = self._tuple_to_action(2, 0)
+                            reward = -0.3
                         else:
-                            aidx, reward = self._tuple_to_action(0, 0), 0
-                        prev_vec = np.zeros(25)
+                            aidx = self._tuple_to_action(0, 0)
+                            reward = 0
+                        prev_vec = np.zeros(self.STATE_SIZE)
                         prev_vec[0] = (prev.get("battery_soc") or 50) / 100
                         prev_vec[3] = prev_price / 0.5
                         sk = self._discretize_state(prev_vec)
                         nk = self._discretize_state(state_vec)
                         target = reward + self.gamma * np.max(self.q_table[nk])
-                        self.q_table[sk][aidx] += self.learning_rate * 0.3 * (target - self.q_table[sk][aidx])
+                        self.q_table[sk][aidx] += (
+                            self.learning_rate * 0.3 * (target - self.q_table[sk][aidx])
+                        )
                         learned += 1
                     prev = point
                 except Exception:

@@ -1,2 +1,4 @@
-from optimizer.holistic import HolisticOptimizer, ChargePlan
-from optimizer.event_detector import EventDetector
+from optimizer.holistic import HolisticOptimizer
+from optimizer.events import EventDetector
+
+__all__ = ["HolisticOptimizer", "EventDetector"]

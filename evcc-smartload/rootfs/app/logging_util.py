@@ -1,9 +1,16 @@
-"""Centralized logging for EVCC-Smartload."""
+"""Simple logging utility for EVCC-Smartload."""
 
-from datetime import datetime
+import logging
+import sys
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+_logger = logging.getLogger("smartload")
 
 
-def log(level: str, msg: str) -> None:
-    """Thread-safe logging to stdout (captured by Home Assistant)."""
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] [{level.upper():5}] {msg}", flush=True)
+def log(level: str, msg: str):
+    getattr(_logger, level, _logger.info)(msg)

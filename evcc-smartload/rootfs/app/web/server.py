@@ -1,11 +1,13 @@
 """
-HTTP API server for EVCC-Smartload.
+HTTP API server for EVCC-Smartload — v5.0
 
-Serves:
-  - HTML dashboard (/)
-  - JSON API endpoints (/status, /slots, /vehicles, /rl-devices, /config, etc.)
-  - Static files (/static/*)
-  - Documentation viewer (/docs/*)
+New in v5:
+  - Constructor accepts optional sequencer, driver_mgr, notifier
+  - GET /sequencer  — charge schedule + request status + quiet hours
+  - GET /drivers    — driver/Telegram config overview (no secrets)
+  - POST /sequencer/request — manually add a charge request
+  - POST /sequencer/cancel  — cancel a charge request
+  - Existing endpoints fully backward-compatible
 """
 
 import json
@@ -33,7 +35,9 @@ class WebServer:
 
     def __init__(self, cfg: Config, optimizer, rl_agent, comparator,
                  event_detector, collector, vehicle_monitor, rl_devices,
-                 manual_store: ManualSocStore, decision_log=None):
+                 manual_store: ManualSocStore, decision_log=None,
+                 # v5 optional
+                 sequencer=None, driver_mgr=None, notifier=None):
         self.cfg = cfg
         self.lp = optimizer
         self.rl = rl_agent
@@ -44,6 +48,10 @@ class WebServer:
         self.rl_devices = rl_devices
         self.manual_store = manual_store
         self.decision_log = decision_log
+        # v5
+        self.sequencer = sequencer
+        self.driver_mgr = driver_mgr
+        self.notifier = notifier
 
         self._last_state: Optional[SystemState] = None
         self._last_lp_action: Optional[Action] = None
@@ -63,7 +71,7 @@ class WebServer:
     # ------------------------------------------------------------------
 
     def start(self):
-        srv = self  # closure reference
+        srv = self
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_): pass
@@ -81,43 +89,31 @@ class WebServer:
                 self.end_headers()
                 self.wfile.write(html.encode())
 
-            # ---- GET routes ----
-
             def do_GET(self):
                 path = self.path.split("?")[0]
 
                 if path == "/":
                     self._html(render_template("dashboard.html", {"version": VERSION}))
-
                 elif path == "/health":
                     self._json({"status": "ok", "version": VERSION})
-
                 elif path == "/status":
                     self._json(srv._api_status())
-
                 elif path == "/slots":
                     tariffs = srv.collector.evcc.get_tariff_grid()
                     self._json(srv._api_slots(tariffs, srv._last_solar_forecast))
-
                 elif path == "/vehicles":
                     self._json(srv._api_vehicles())
-
                 elif path == "/rl-devices":
                     self._json(srv._api_rl_devices())
-
                 elif path == "/config":
                     self._json(srv._api_config())
-
                 elif path == "/summary":
                     self._json(srv._api_summary())
-
                 elif path == "/comparisons":
                     self._json({"recent": srv.comparator.comparisons[-50:],
                                 "summary": srv.comparator.get_status()})
-
                 elif path == "/strategy":
                     self._json(srv._api_strategy())
-
                 elif path == "/decisions":
                     if srv.decision_log:
                         self._json({
@@ -126,24 +122,22 @@ class WebServer:
                         })
                     else:
                         self._json({"entries": [], "cycle": {}})
-
                 elif path == "/chart-data":
                     tariffs = srv.collector.evcc.get_tariff_grid()
                     self._json(srv._api_chart_data(tariffs, srv._last_solar_forecast))
-
+                # v5 endpoints
+                elif path == "/sequencer":
+                    self._json(srv._api_sequencer())
+                elif path == "/drivers":
+                    self._json(srv._api_drivers())
                 elif path == "/docs":
                     self._html(srv._docs_index())
-
                 elif path.startswith("/docs/"):
                     self._html(srv._docs_page(path))
-
                 elif path.startswith("/static/"):
                     srv._serve_static(self, path)
-
                 else:
                     self._json({"error": "not found"}, 404)
-
-            # ---- POST routes ----
 
             def do_POST(self):
                 path = self.path
@@ -181,6 +175,47 @@ class WebServer:
                     srv.vehicle_monitor.trigger_refresh(name)
                     self._json({"ok": True})
 
+                # v5: sequencer manual request
+                elif path == "/sequencer/request":
+                    if srv.sequencer is None:
+                        self._json({"error": "sequencer disabled"}, 503)
+                        return
+                    vehicle = body.get("vehicle", "")
+                    target_soc = body.get("target_soc")
+                    if not vehicle or target_soc is None:
+                        self._json({"error": "vehicle and target_soc required"}, 400)
+                        return
+                    vehicles = srv.vehicle_monitor.get_all_vehicles()
+                    v = vehicles.get(vehicle)
+                    if not v:
+                        self._json({"error": f"vehicle '{vehicle}' not found"}, 404)
+                        return
+                    req = srv.sequencer.add_request(
+                        vehicle=vehicle,
+                        driver=body.get("driver", "manual"),
+                        target_soc=int(target_soc),
+                        current_soc=v.get_effective_soc(),
+                        capacity_kwh=v.capacity_kwh,
+                        charge_power_kw=getattr(v, "charge_power_kw", None) or 11.0,
+                    )
+                    self._json({"ok": True, "request": {
+                        "vehicle": req.vehicle_name,
+                        "target_soc": req.target_soc,
+                        "need_kwh": req.need_kwh,
+                        "hours_needed": req.hours_needed,
+                    }})
+
+                elif path == "/sequencer/cancel":
+                    if srv.sequencer is None:
+                        self._json({"error": "sequencer disabled"}, 503)
+                        return
+                    vehicle = body.get("vehicle", "")
+                    if not vehicle:
+                        self._json({"error": "vehicle required"}, 400)
+                        return
+                    srv.sequencer.remove_request(vehicle)
+                    self._json({"ok": True, "vehicle": vehicle})
+
                 else:
                     self._json({"error": "not found"}, 404)
 
@@ -199,7 +234,7 @@ class WebServer:
         threading.Thread(target=_run, daemon=True).start()
 
     # ------------------------------------------------------------------
-    # Static file serving
+    # Static
     # ------------------------------------------------------------------
 
     def _serve_static(self, handler, path: str):
@@ -225,6 +260,7 @@ class WebServer:
         comparison = self.comparator.get_status()
         maturity = self._rl_maturity(comparison)
         lp = self._last_lp_action
+        p = state.price_percentiles if state else {}
         return {
             "timestamp": datetime.now().isoformat(),
             "version": VERSION,
@@ -240,10 +276,18 @@ class WebServer:
                 "pv_w": state.pv_power,
                 "home_w": state.home_power,
                 "grid_w": state.grid_power,
+                # v5: percentile context
+                "price_p20_ct": round(p.get(20, state.current_price) * 100, 1),
+                "price_p60_ct": round(p.get(60, state.current_price) * 100, 1),
+                "price_spread_ct": round(state.price_spread * 100, 1),
+                "hours_cheap_remaining": state.hours_cheap_remaining,
+                "solar_forecast_kwh": round(state.solar_forecast_total_kwh, 1),
             } if state else None,
             "active_limits": {
                 "battery_ct": round(lp.battery_limit_eur * 100, 1) if lp and lp.battery_limit_eur else None,
                 "ev_ct": round(lp.ev_limit_eur * 100, 1) if lp and lp.ev_limit_eur else None,
+                "battery_action": lp.battery_action if lp else None,
+                "ev_action": lp.ev_action if lp else None,
             },
             "rl": {
                 "enabled": self.cfg.rl_enabled,
@@ -254,12 +298,17 @@ class WebServer:
                 "comparisons": comparison.get("comparisons", 0),
                 "win_rate": round(comparison.get("win_rate", 0) * 100, 1),
                 "ready": comparison.get("rl_ready", False),
+                "n_actions": self.rl.N_ACTIONS,
+                "state_size": self.rl.STATE_SIZE,
             },
             "costs": {
                 "optimizer_total_eur": round(comparison.get("lp_total_cost", 0), 2),
                 "rl_simulated_eur": round(comparison.get("rl_total_cost", 0), 2),
             },
             "config": self._api_config(),
+            # v5
+            "sequencer_enabled": self.sequencer is not None,
+            "telegram_enabled": self.driver_mgr.telegram_enabled if self.driver_mgr else False,
         }
 
     def _api_vehicles(self) -> dict:
@@ -321,6 +370,11 @@ class WebServer:
             "bat_to_ev_min_ct": self.cfg.battery_to_ev_min_profit_ct,
             "bat_to_ev_dynamic": self.cfg.battery_to_ev_dynamic_limit,
             "bat_to_ev_floor": self.cfg.battery_to_ev_floor_soc,
+            # v5
+            "quiet_hours_enabled": self.cfg.quiet_hours_enabled,
+            "quiet_hours_start": self.cfg.quiet_hours_start,
+            "quiet_hours_end": self.cfg.quiet_hours_end,
+            "sequencer_enabled": self.cfg.sequencer_enabled,
         }
 
     def _api_summary(self) -> dict:
@@ -337,9 +391,28 @@ class WebServer:
             "battery_limit_ct": round(lp.battery_limit_eur * 100, 1) if lp and lp.battery_limit_eur else None,
         }
 
-    # ------------------------------------------------------------------
-    # RL maturity helper
-    # ------------------------------------------------------------------
+    def _api_sequencer(self) -> dict:
+        """v5: Charge sequencer status."""
+        if self.sequencer is None:
+            return {"enabled": False}
+        now = datetime.now(timezone.utc)
+        return {
+            "enabled": True,
+            "timestamp": now.isoformat(),
+            "requests": self.sequencer.get_requests_summary(),
+            "schedule": self.sequencer.get_schedule_summary(),
+            "quiet_hours": self.sequencer.get_quiet_hours_status(now),
+            "notifications_pending": self.notifier.get_pending() if self.notifier else {},
+        }
+
+    def _api_drivers(self) -> dict:
+        """v5: Driver/Telegram config (no secrets)."""
+        if self.driver_mgr is None:
+            return {"enabled": False, "drivers": []}
+        return {
+            "enabled": True,
+            **self.driver_mgr.to_api_dict(),
+        }
 
     def _rl_maturity(self, comp: dict) -> dict:
         n = comp.get("comparisons", 0)
@@ -349,23 +422,22 @@ class WebServer:
         th = self.cfg.rl_ready_threshold
 
         if ready:
-            return {"status": "🎉 READY", "percent": 100, "message": f"Win-Rate: {wr*100:.0f}%", "color": "green"}
-
+            return {"status": "🎉 READY", "percent": 100,
+                    "message": f"Win-Rate: {wr*100:.0f}%", "color": "green"}
         cp = min(100, n / mn * 100)
         wp = min(100, wr / th * 100) if th else 0
         pct = round(cp * 0.4 + wp * 0.6, 1)
-
         if n < 10:
-            return {"status": "🌱 Lernphase", "percent": pct, "message": f"Sammle Erfahrungen ({n}/{mn})", "color": "orange"}
+            return {"status": "🌱 Lernphase", "percent": pct,
+                    "message": f"Sammle Erfahrungen ({n}/{mn})", "color": "orange"}
         if n < mn * 0.5:
-            return {"status": "📈 Fortschritt", "percent": pct, "message": f"{n} Vergleiche, Win-Rate: {wr*100:.0f}%", "color": "blue"}
+            return {"status": "📈 Fortschritt", "percent": pct,
+                    "message": f"{n} Vergleiche, Win-Rate: {wr*100:.0f}%", "color": "blue"}
         if wr < th * 0.8:
-            return {"status": "🔧 Optimierung", "percent": pct, "message": f"Win-Rate {wr*100:.0f}% (Ziel: {th*100:.0f}%)", "color": "yellow"}
-        return {"status": "⏳ Fast bereit", "percent": pct, "message": f"Noch {mn - n} Vergleiche", "color": "lightgreen"}
-
-    # ------------------------------------------------------------------
-    # Strategy explanation
-    # ------------------------------------------------------------------
+            return {"status": "🔧 Optimierung", "percent": pct,
+                    "message": f"Win-Rate {wr*100:.0f}% (Ziel: {th*100:.0f}%)", "color": "yellow"}
+        return {"status": "⏳ Fast bereit", "percent": pct,
+                "message": f"Noch {mn - n} Vergleiche", "color": "lightgreen"}
 
     def _api_strategy(self) -> dict:
         s = self._last_state
@@ -375,63 +447,59 @@ class WebServer:
             return {"text": "Warte auf erste Daten...", "actions": []}
 
         price = s.current_price * 100
+        p20 = s.price_percentiles.get(20, s.current_price) * 100
+        p60 = s.price_percentiles.get(60, s.current_price) * 100
         actions = []
         texts = []
 
-        # Battery strategy
         bat_limit = lp.battery_limit_eur * 100 if lp.battery_limit_eur else None
-        if lp.battery_action == 1:
-            texts.append(f"🔋 Batterie wird geladen (Preis {price:.1f}ct < Limit {bat_limit:.1f}ct)")
-            actions.append({"device": "battery", "action": "charge", "reason": "price_below_limit"})
-        elif lp.battery_action == 3:
-            texts.append(f"🔋 Batterie entlädt (Preis {price:.1f}ct ist hoch)")
+        bat_names = {0: "hält", 1: "lädt (P20)", 2: "lädt (P40)", 3: "lädt (P60)",
+                     4: "lädt (Max)", 5: "lädt (PV)", 6: "entlädt"}
+        bat_label = bat_names.get(lp.battery_action, "?")
+
+        if lp.battery_action in (1, 2, 3, 4):
+            texts.append(f"🔋 Batterie {bat_label} (Preis {price:.1f}ct ≤ {bat_limit:.1f}ct)")
+            actions.append({"device": "battery", "action": "charge", "reason": "price_below_threshold"})
+        elif lp.battery_action == 6:
+            texts.append(f"🔋 Batterie entlädt (Preis {price:.1f}ct > P60={p60:.1f}ct)")
             actions.append({"device": "battery", "action": "discharge", "reason": "price_high"})
-        elif lp.battery_action == 2:
-            texts.append(f"🔋 Batterie speichert PV-Überschuss ({s.pv_power:.0f}W PV)")
+        elif lp.battery_action == 5:
+            texts.append(f"🔋 Batterie lädt nur Solar-Überschuss")
             actions.append({"device": "battery", "action": "pv_charge", "reason": "surplus"})
         else:
             texts.append(f"🔋 Batterie hält SoC bei {s.battery_soc:.0f}%")
             actions.append({"device": "battery", "action": "hold", "reason": "optimal"})
 
-        # EV strategy
         if s.ev_connected:
             ev_limit = lp.ev_limit_eur * 100 if lp.ev_limit_eur else None
-            if lp.ev_action == 1:
-                texts.append(f"🔌 {s.ev_name or 'EV'} wird geladen (Preis {price:.1f}ct < Limit {ev_limit:.1f}ct)")
-                actions.append({"device": "ev", "action": "charge", "reason": "price_below_limit"})
-            elif lp.ev_action == 0:
-                texts.append(f"🔌 {s.ev_name or 'EV'} wartet auf günstigeren Strom")
+            ev_names = {0: "wartet", 1: "lädt (P30)", 2: "lädt (P60)", 3: "lädt (Max)", 4: "lädt (PV)"}
+            ev_label = ev_names.get(lp.ev_action, "?")
+            if lp.ev_action > 0:
+                texts.append(f"🔌 {s.ev_name or 'EV'} {ev_label} @ {ev_limit:.1f}ct")
+                actions.append({"device": "ev", "action": "charge", "reason": "price_below_threshold"})
+            else:
+                texts.append(f"🔌 {s.ev_name or 'EV'} wartet")
                 actions.append({"device": "ev", "action": "wait", "reason": "price_too_high"})
 
-        # PV info
         pv_surplus = max(0, s.pv_power - s.home_power)
         if s.pv_power > 500:
-            texts.append(f"☀️ PV: {s.pv_power/1000:.1f} kW → {pv_surplus/1000:.1f} kW Überschuss (Haus: {s.home_power/1000:.1f} kW)")
-        elif s.pv_power > 0:
-            texts.append(f"🌤️ PV: {s.pv_power:.0f}W (Haus: {s.home_power/1000:.1f} kW – kein Überschuss)")
+            texts.append(f"☀️ PV: {s.pv_power/1000:.1f} kW → {pv_surplus/1000:.1f} kW Überschuss")
         else:
-            texts.append(f"🌙 Kein Solar – Netzstrom-Optimierung (Haus: {s.home_power/1000:.1f} kW)")
+            texts.append(f"🌙 Kein Solar – Preis {price:.1f}ct (P20={p20:.1f} P60={p60:.1f})")
 
-        # RL info
         bat_mode_info = self.rl_devices.get_device_status("battery") if self.rl_devices else {}
         mode = bat_mode_info.get("current_mode", "lp")
-        if mode == "rl":
-            texts.append("🤖 Batterie wird durch RL gesteuert")
-        else:
-            texts.append("📐 Batterie wird durch LP optimiert")
+        texts.append(f"{'🤖 RL' if mode == 'rl' else '📐 LP'} steuert Batterie")
 
         return {"text": " · ".join(texts[:2]), "details": texts, "actions": actions}
 
     def _api_chart_data(self, tariffs: List[Dict], solar_forecast: List[Dict] = None) -> dict:
-        from datetime import timedelta
         now = datetime.now(timezone.utc)
-
-        # Parse grid prices
         prices = []
         for t in tariffs:
             try:
                 s = t.get("start", "")
-                val = float(t.get("value", 0)) * 100  # → ct/kWh
+                val = float(t.get("value", 0)) * 100
                 if s.endswith("Z"):
                     start = datetime.fromisoformat(s.replace("Z", "+00:00"))
                 elif "+" in s:
@@ -449,22 +517,15 @@ class WebServer:
             except Exception:
                 continue
 
-        # Parse solar forecast into hourly kW values
         solar_by_hour = {}
         if solar_forecast:
-            # Detect unit: W vs kW
             raw_vals = [float(t.get("value", 0)) for t in solar_forecast
                         if float(t.get("value", 0)) > 0]
-            unit_factor = 1.0
-            if raw_vals:
-                median_val = sorted(raw_vals)[len(raw_vals) // 2]
-                if median_val > 100:
-                    unit_factor = 0.001  # W → kW
-
+            unit_factor = 0.001 if raw_vals and sorted(raw_vals)[len(raw_vals) // 2] > 100 else 1.0
             for t in solar_forecast:
                 try:
                     s = t.get("start", "")
-                    val = float(t.get("value", 0)) * unit_factor  # ensure kW
+                    val = float(t.get("value", 0)) * unit_factor
                     if s.endswith("Z"):
                         start = datetime.fromisoformat(s.replace("Z", "+00:00"))
                     elif "+" in s:
@@ -473,27 +534,23 @@ class WebServer:
                         start = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
                     hour = start.replace(minute=0, second=0, microsecond=0)
                     hour_key = hour.astimezone().strftime("%H:%M")
-                    # Aggregate if multiple entries per hour
-                    if hour_key in solar_by_hour:
-                        solar_by_hour[hour_key] = max(solar_by_hour[hour_key], val)
-                    else:
-                        solar_by_hour[hour_key] = val
+                    solar_by_hour[hour_key] = max(solar_by_hour.get(hour_key, 0), val)
                 except Exception:
                     continue
 
-        # Merge solar into prices
         for p in prices:
             p["solar_kw"] = round(solar_by_hour.get(p["hour"], 0), 2)
 
-        # PV and home data (from current state)
-        s = self._last_state
-        pv_now = s.pv_power / 1000 if s else 0  # kW
-        home_now = s.home_power / 1000 if s else 0
-        grid_now = s.grid_power / 1000 if s else 0
-        bat_power = s.battery_power / 1000 if s else 0
+        # v5: add percentile lines to chart data
+        state = self._last_state
+        p20_ct = state.price_percentiles.get(20, 0) * 100 if state else 0
+        p60_ct = state.price_percentiles.get(60, 0) * 100 if state else 0
 
-        # Total solar forecast energy
-        total_solar_kwh = sum(solar_by_hour.values())  # kW per hour ≈ kWh
+        pv_now = state.pv_power / 1000 if state else 0
+        home_now = state.home_power / 1000 if state else 0
+        grid_now = state.grid_power / 1000 if state else 0
+        bat_power = state.battery_power / 1000 if state else 0
+        total_solar_kwh = sum(solar_by_hour.values())
 
         return {
             "prices": prices,
@@ -504,9 +561,12 @@ class WebServer:
             "grid_now_kw": round(grid_now, 2),
             "battery_power_kw": round(bat_power, 2),
             "pv_surplus_kw": round(max(0, pv_now - home_now), 2),
-            "current_price_ct": round(s.current_price * 100, 1) if s else None,
+            "current_price_ct": round(state.current_price * 100, 1) if state else None,
             "battery_max_ct": self.cfg.battery_max_price_ct,
             "ev_max_ct": self.cfg.ev_max_price_ct,
+            # v5
+            "p20_ct": round(p20_ct, 1),
+            "p60_ct": round(p60_ct, 1),
         }
 
     # ------------------------------------------------------------------
@@ -522,7 +582,7 @@ class WebServer:
 </style></head><body><div class="c">
 <h1>📚 EVCC-Smartload v{VERSION} Dokumentation</h1>
 <a href="/docs/readme"><div class="card"><h2>📖 README</h2><p>Installation, Konfiguration, Features, API, FAQ</p></div></a>
-<a href="/docs/changelog"><div class="card"><h2>📝 Changelog v4.3.11</h2><p>Was ist neu? Breaking Changes, neue Features</p></div></a>
+<a href="/docs/changelog"><div class="card"><h2>📝 Changelog</h2><p>Was ist neu? Breaking Changes, neue Features</p></div></a>
 <a href="/docs/api"><div class="card"><h2>🔌 API Referenz</h2><p>Alle Endpunkte mit Beispielen</p></div></a>
 <p style="text-align:center;margin-top:30px;"><a href="/">← Dashboard</a></p>
 </div></body></html>"""
@@ -544,7 +604,6 @@ class WebServer:
                 content = f"# Fehler\nDokument nicht gefunden: {filename}"
         except Exception as e:
             content = f"# Fehler\n{e}"
-
         h = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         h = re.sub(r"^# (.+)$", r"<h1>\1</h1>", h, flags=re.M)
         h = re.sub(r"^## (.+)$", r"<h2>\1</h2>", h, flags=re.M)
@@ -555,7 +614,6 @@ class WebServer:
         h = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", h)
         h = re.sub(r"\*([^\*]+)\*", r"<em>\1</em>", h)
         h = "<p>" + h.replace("\n\n", "</p><p>") + "</p>"
-
         return f"""<!DOCTYPE html><html><head><title>{filename}</title><meta charset="utf-8">
 <style>body{{font-family:-apple-system,sans-serif;margin:20px;background:#1a1a2e;color:#eee;line-height:1.6;}}
 .c{{max-width:900px;margin:0 auto;}}h1{{color:#00d4ff;border-bottom:2px solid #00d4ff;padding-bottom:10px;}}
@@ -578,29 +636,31 @@ pre{{background:#0f3460;padding:15px;border-radius:6px;}}code{{color:#00ff88;}}
 </style></head><body><div class="c">
 <h1>🔌 EVCC-Smartload API v{VERSION}</h1>
 <p>Basis-URL: <code>http://homeassistant:{self.cfg.api_port}</code></p>
-<div class="ep"><span class="m get">GET</span> <span class="path">/health</span><p>Health-Check</p></div>
-<div class="ep"><span class="m get">GET</span> <span class="path">/status</span><p>Vollständiger System-Status inkl. RL-Metriken</p></div>
-<div class="ep"><span class="m get">GET</span> <span class="path">/vehicles</span><p>Alle Fahrzeuge mit SoC, Quelle, manuellen Overrides</p></div>
-<div class="ep"><span class="m get">GET</span> <span class="path">/slots</span><p>Detaillierte Ladeslots für alle Geräte</p></div>
+<div class="ep"><span class="m get">GET</span> <span class="path">/status</span><p>Vollständiger System-Status inkl. RL, Percentile, Sequencer-Status</p></div>
+<div class="ep"><span class="m get">GET</span> <span class="path">/vehicles</span><p>Alle Fahrzeuge mit SoC, Quelle, manuelle Overrides</p></div>
+<div class="ep"><span class="m get">GET</span> <span class="path">/slots</span><p>Ladeslots für alle Geräte</p></div>
+<div class="ep"><span class="m get">GET</span> <span class="path">/sequencer</span><p>v5: Lade-Zeitplan, Anfragen, Ruhezeit-Status</p></div>
+<div class="ep"><span class="m get">GET</span> <span class="path">/drivers</span><p>v5: Fahrer-Konfiguration (keine Secrets)</p></div>
 <div class="ep"><span class="m get">GET</span> <span class="path">/rl-devices</span><p>RL Device Control pro Gerät</p></div>
 <div class="ep"><span class="m post">POST</span> <span class="path">/vehicles/manual-soc</span>
-<p>Manuellen SoC setzen</p><pre><code>{{"vehicle": "ORA_03", "soc": 45}}</code></pre></div>
+<pre><code>{{"vehicle": "ORA_03", "soc": 45}}</code></pre></div>
+<div class="ep"><span class="m post">POST</span> <span class="path">/sequencer/request</span>
+<p>v5: Manuell Ladewunsch eintragen</p>
+<pre><code>{{"vehicle": "KIA_EV9", "target_soc": 80}}</code></pre></div>
+<div class="ep"><span class="m post">POST</span> <span class="path">/sequencer/cancel</span>
+<pre><code>{{"vehicle": "KIA_EV9"}}</code></pre></div>
 <div class="ep"><span class="m post">POST</span> <span class="path">/rl-override</span>
-<p>RL-Mode Override</p><pre><code>{{"device": "battery", "mode": "manual_lp"}}</code></pre></div>
-<div class="ep"><span class="m post">POST</span> <span class="path">/vehicles/refresh</span>
-<p>Sofortigen Vehicle-Refresh auslösen</p></div>
+<pre><code>{{"device": "battery", "mode": "manual_lp"}}</code></pre></div>
 <p style="text-align:center;margin-top:50px;"><a href="/docs" style="color:#00d4ff;">← Dokumentation</a></p>
 </div></body></html>"""
 
 
 # =============================================================================
-# Charge-slot calculation (stateless helper)
+# Charge-slot calculation (stateless helper — unchanged from v4)
 # =============================================================================
 
 def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=None) -> dict:
     now = datetime.now(timezone.utc)
-
-    # Parse tariffs
     buckets: Dict[datetime, List[float]] = defaultdict(list)
     for t in tariffs:
         try:
@@ -628,16 +688,13 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
         ev_deadline = (now + timedelta(days=1)).replace(hour=deadline_hour, minute=0, second=0, microsecond=0)
 
     bat_soc = last_state.battery_soc if last_state else 50
-
-    # --- PV forecast (prefer real evcc solar forecast, fallback to estimate) ---
     pv_now_kw = (last_state.pv_power / 1000) if last_state else 0
     home_now_kw = (last_state.home_power / 1000) if last_state else 1.5
 
-    # Parse real solar forecast from evcc
     solar_hourly_kw = {}
     if solar_forecast:
-        # Detect unit: collect raw values to check if they're in W or kW
-        raw_vals = []
+        raw_vals = [float(t.get("value", 0)) for t in solar_forecast if float(t.get("value", 0)) > 0]
+        unit_factor = 0.001 if raw_vals and sorted(raw_vals)[len(raw_vals) // 2] > 100 else 1.0
         parsed_entries = []
         for t in solar_forecast:
             try:
@@ -645,7 +702,6 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
                 val = float(t.get("value", 0))
                 if val <= 0:
                     continue
-                raw_vals.append(val)
                 if s.endswith("Z"):
                     start = datetime.fromisoformat(s.replace("Z", "+00:00"))
                 elif "+" in s:
@@ -654,30 +710,16 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
                     start = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
                 hour = start.replace(minute=0, second=0, microsecond=0)
                 if hour >= now:
-                    parsed_entries.append((hour, val))
+                    parsed_entries.append((hour, val * unit_factor))
             except Exception:
                 continue
-
-        # Auto-detect Watts vs kW: if median > 100, values are in Watts
-        unit_factor = 1.0
-        if raw_vals:
-            median_val = sorted(raw_vals)[len(raw_vals) // 2]
-            if median_val > 100:
-                unit_factor = 0.001  # W → kW
-                log("debug", f"Solar forecast unit: Watts (median={median_val:.0f}), converting to kW")
-
-        for hour, val in parsed_entries:
-            val_kw = val * unit_factor
+        for hour, val_kw in parsed_entries:
             solar_hourly_kw[hour] = max(solar_hourly_kw.get(hour, 0), val_kw)
 
     if solar_hourly_kw:
-        # Real forecast: sum surplus (solar - home estimate) for remaining hours
-        pv_energy_forecast_kwh = sum(max(0, kw - home_now_kw) for kw in solar_hourly_kw.values())
-        # Sanity cap: max 50 kWh per day for residential
-        pv_energy_forecast_kwh = min(pv_energy_forecast_kwh, 50.0)
+        pv_energy_forecast_kwh = min(50.0, sum(max(0, kw - home_now_kw) for kw in solar_hourly_kw.values()))
         forecast_source = "evcc"
     else:
-        # Fallback: crude estimate from current PV
         pv_surplus_kw = max(0, pv_now_kw - home_now_kw)
         local_hour = now.astimezone().hour if now.tzinfo else now.hour
         pv_hours_remaining = max(0, 19 - max(local_hour, 7))
@@ -698,20 +740,18 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
             "forecast_source": forecast_source,
             "solar_hours": len(solar_hourly_kw),
         },
-        "battery": _device_slots("Hausbatterie", cfg.battery_capacity_kwh, bat_soc,
-                                 cfg.battery_max_soc, cfg.battery_charge_power_kw,
-                                 cfg.battery_max_price_ct, hourly, None, "🔋",
-                                 pv_offset_kwh=min(pv_energy_forecast_kwh * 0.3, 5)),
+        "battery": _device_slots(
+            "Hausbatterie", cfg.battery_capacity_kwh, bat_soc,
+            cfg.battery_max_soc, cfg.battery_charge_power_kw,
+            cfg.battery_max_price_ct, hourly, None, "🔋",
+            pv_offset_kwh=min(pv_energy_forecast_kwh * 0.3, 5),
+        ),
         "vehicles": {},
     }
 
-    # Distribute remaining PV surplus to vehicles
-    pv_for_vehicles = max(0, pv_energy_forecast_kwh * 0.7)  # 70% for EVs if connected
-    n_charging_vehicles = sum(1 for v in vehicles.values()
-                              if v.get_effective_soc() < cfg.ev_target_soc)
-    pv_per_vehicle = pv_for_vehicles / max(1, n_charging_vehicles)
-    # Cap per-vehicle PV offset to max capacity (sanity check)
-    pv_per_vehicle = min(pv_per_vehicle, 100)
+    pv_for_vehicles = max(0, pv_energy_forecast_kwh * 0.7)
+    n_charging = sum(1 for v in vehicles.values() if v.get_effective_soc() < cfg.ev_target_soc)
+    pv_per_vehicle = min(pv_for_vehicles / max(1, n_charging), 100)
 
     for name, v in vehicles.items():
         needs_charge = v.get_effective_soc() < cfg.ev_target_soc
@@ -722,19 +762,15 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
             v.last_update.isoformat() if v.last_update else None,
             pv_offset_kwh=pv_per_vehicle if needs_charge else 0,
         )
-        # Add poll/stale info
         result["vehicles"][name]["last_poll"] = v.last_poll.isoformat() if v.last_poll else None
         result["vehicles"][name]["poll_age"] = v.get_poll_age_string()
         result["vehicles"][name]["data_age"] = v.get_data_age_string()
-        # Not stale if connected to wallbox (evcc has live data)
         result["vehicles"][name]["is_stale"] = v.is_data_stale() and not v.connected_to_wallbox
         result["vehicles"][name]["data_source"] = v.data_source
         result["vehicles"][name]["connected"] = v.connected_to_wallbox
         result["vehicles"][name]["charging"] = v.charging
 
-    # --- Battery-to-EV optimization ---
-    # Calculate if discharging battery to charge EVs is cheaper than grid
-    # Skip vehicles with 0% SoC from evcc fallback (means "unknown", not "empty")
+    # Battery-to-EV
     total_ev_need = sum(
         max(0, (cfg.ev_target_soc - v.get_effective_soc()) / 100 * v.capacity_kwh)
         for v in vehicles.values()
@@ -742,28 +778,18 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
     )
     bat_available_kwh = max(0, (bat_soc - cfg.battery_min_soc) / 100 * cfg.battery_capacity_kwh)
     round_trip_eff = cfg.battery_charge_efficiency * cfg.battery_discharge_efficiency
-
-    # Estimate battery stored cost (avg of cheapest prices seen in tariff)
     if hourly:
         all_prices_ct = sorted([p * 100 for _, p in hourly])
-        # Assume battery was charged at avg of cheapest 30% of prices
         cheap_n = max(1, len(all_prices_ct) // 3)
         avg_charge_price_ct = sum(all_prices_ct[:cheap_n]) / cheap_n
     else:
         avg_charge_price_ct = cfg.battery_max_price_ct
-
-    # Effective cost to deliver 1 kWh from battery to EV
     bat_to_ev_cost_ct = avg_charge_price_ct / round_trip_eff
-    # Current grid price
     current_price_ct = (last_state.current_price * 100) if last_state else 30.0
-    # Upcoming average price (next 6h)
-    upcoming_prices = [p * 100 for h, p in hourly[:6]] if hourly else [current_price_ct]
+    upcoming_prices = [p * 100 for _, p in hourly[:6]] if hourly else [current_price_ct]
     avg_upcoming_ct = sum(upcoming_prices) / len(upcoming_prices) if upcoming_prices else current_price_ct
-
-    # Is it profitable?
     savings_vs_grid_ct = current_price_ct - bat_to_ev_cost_ct
     is_profitable = savings_vs_grid_ct >= cfg.battery_to_ev_min_profit_ct
-    # How much can we usefully discharge?
     bat_for_ev_kwh = min(bat_available_kwh, total_ev_need) if is_profitable else 0
 
     result["battery_to_ev"] = {
@@ -788,41 +814,30 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
         ),
     }
 
-    # Dynamic discharge limits (for dashboard display)
     if cfg.battery_to_ev_dynamic_limit and total_ev_need > 0.5:
         bat_cap = cfg.battery_capacity_kwh
         floor = cfg.battery_to_ev_floor_soc
         home_kw = (last_state.home_power / 1000) if last_state and last_state.home_power else 1.0
-
-        # Solar surplus estimate (proper kWh with slot duration)
         solar_surplus_kwh = calc_solar_surplus_kwh(solar_forecast, home_kw)
         solar_refill_pct = min(90, (solar_surplus_kwh / bat_cap) * 100) if bat_cap > 0 else 0
-
-        # Cheap grid hours
         cheap_hours = sum(1 for _, p in hourly if p * 100 <= cfg.battery_max_price_ct)
         grid_refill_kwh = cheap_hours * cfg.battery_charge_power_kw * cfg.battery_charge_efficiency
         grid_refill_pct = min(90, (grid_refill_kwh / bat_cap) * 100) if bat_cap > 0 else 0
-
         total_refill_pct = min(80, solar_refill_pct + grid_refill_pct)
         safe_discharge = total_refill_pct * 0.8
         dynamic_floor = max(floor, int(bat_soc - safe_discharge))
-
         ev_need_pct_raw = (total_ev_need / (bat_cap * round_trip_eff)) * 100 if bat_cap > 0 else 0
-        ev_need_pct = min(ev_need_pct_raw, 100)  # Can't discharge more than 100%
+        ev_need_pct = min(ev_need_pct_raw, 100)
         buffer_soc = max(floor, int(bat_soc - ev_need_pct), dynamic_floor)
         priority_soc = max(cfg.battery_min_soc, floor - 5)
-
         result["battery_to_ev"]["dynamic_limits"] = {
-            "buffer_soc": buffer_soc,
-            "priority_soc": priority_soc,
-            "buffer_start_soc": min(90, buffer_soc + 10),
-            "floor_soc": floor,
+            "buffer_soc": buffer_soc, "priority_soc": priority_soc,
+            "buffer_start_soc": min(90, buffer_soc + 10), "floor_soc": floor,
             "solar_refill_pct": round(solar_refill_pct, 1),
             "grid_refill_pct": round(grid_refill_pct, 1),
             "total_refill_pct": round(total_refill_pct, 1),
             "ev_need_pct": round(ev_need_pct, 1),
-            "cheap_hours": cheap_hours,
-            "solar_surplus_kwh": round(solar_surplus_kwh, 1),
+            "cheap_hours": cheap_hours, "solar_surplus_kwh": round(solar_surplus_kwh, 1),
         }
 
     return result
@@ -835,39 +850,29 @@ def _device_slots(name, capacity, soc, target, power_kw, max_price_ct,
     hours_needed = int(net_need / power_kw * 1.2) + 1 if net_need > 1 else 0
     base = {"name": name, "icon": icon, "current_soc": soc, "target_soc": target,
             "capacity_kwh": capacity, "need_kwh": round(net_need, 1),
-            "gross_need_kwh": round(gross_need, 1),
-            "pv_offset_kwh": round(pv_offset_kwh, 1),
+            "gross_need_kwh": round(gross_need, 1), "pv_offset_kwh": round(pv_offset_kwh, 1),
             "hours_needed": hours_needed, "last_update": last_update}
-
     if hours_needed == 0:
         return {**base, "status": "✅ Vollständig geladen", "slots": [],
                 "total_cost_eur": 0, "avg_price_ct": 0}
-
     if deadline:
         eligible = [(h, p) for h, p in hourly if h < deadline and p <= max_price_ct / 100]
     else:
         eligible = [(h, p) for h, p in hourly[:24] if p <= max_price_ct / 100]
-
     if not eligible:
         return {**base, "status": f"⚠️ Keine Stunden unter {max_price_ct}ct", "slots": [],
                 "total_cost_eur": 0, "avg_price_ct": 0}
-
     chosen = sorted(sorted(eligible, key=lambda x: x[1])[:hours_needed], key=lambda x: x[0])
     kwh_per = min(net_need, hours_needed * power_kw) / len(chosen) if chosen else 0
     total_cost = sum(kwh_per * p for _, p in chosen)
     avg_price = sum(p for _, p in chosen) / len(chosen) * 100
-
     now = datetime.now(timezone.utc)
     slots = [{
-        "hour": h.strftime("%H:%M"),
-        "hour_end": (h + timedelta(hours=1)).strftime("%H:%M"),
-        "price_ct": round(p * 100, 1),
-        "power_kw": power_kw,
-        "energy_kwh": round(kwh_per, 1),
-        "cost_eur": round(kwh_per * p, 2),
+        "hour": h.strftime("%H:%M"), "hour_end": (h + timedelta(hours=1)).strftime("%H:%M"),
+        "price_ct": round(p * 100, 1), "power_kw": power_kw,
+        "energy_kwh": round(kwh_per, 1), "cost_eur": round(kwh_per * p, 2),
         "is_now": h.hour == now.hour and h.date() == now.date(),
     } for h, p in chosen]
-
     pv_text = f" (inkl. ~{pv_offset_kwh:.0f}kWh PV)" if pv_offset_kwh > 0.5 else ""
     status = f"✅ {len(chosen)} Stunden geplant{pv_text}" if len(chosen) >= hours_needed else f"⚠️ Nur {len(chosen)}/{hours_needed} Stunden"
     return {**base, "status": status, "slots": slots,
