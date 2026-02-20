@@ -200,6 +200,7 @@ class DataCollector:
             ev_connected=ev_connected,
             ev_name=ev_name,
             ev_soc=float(ev_soc),
+            ev_power=0.0,
             ev_capacity_kwh=float(ev_cap),
         )
 

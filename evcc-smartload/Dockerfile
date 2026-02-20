@@ -6,6 +6,7 @@ RUN apk add --no-cache \
     py3-pip \
     py3-yaml \
     && pip3 install --no-cache-dir --break-system-packages \
+        pyyaml \
         numpy \
         requests \
         hyundai-kia-connect-api \

@@ -87,3 +87,38 @@ class InfluxDBClient:
             fields["ev_action"] = int(action.ev_action)
 
         self.write("smartload_state", fields)
+
+    def get_history_hours(self, hours: int = 24) -> list:
+        """Return recent state history from InfluxDB (for RL bootstrap).
+        Returns list of dicts with price_ct, battery_soc, pv_power fields."""
+        if not self._enabled:
+            return []
+        try:
+            import urllib.request, urllib.parse, json as _json
+            query = (f"SELECT mean(price_ct), mean(battery_soc), mean(pv_power) "
+                     f"FROM smartload_state "
+                     f"WHERE time > now() - {hours}h "
+                     f"GROUP BY time(1h) fill(none)")
+            url = (f"{self._base_url}/query"
+                   f"?db={urllib.parse.quote(self.database)}"
+                   f"&q={urllib.parse.quote(query)}")
+            req = urllib.request.Request(url)
+            if self.username:
+                import base64
+                cred = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
+                req.add_header("Authorization", f"Basic {cred}")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read())
+            results = []
+            for series in data.get("results", [{}])[0].get("series", []):
+                for row in series.get("values", []):
+                    if row[1] is not None:
+                        results.append({
+                            "price_ct": row[1],
+                            "battery_soc": row[2] or 0,
+                            "pv_power": row[3] or 0,
+                        })
+            return results
+        except Exception as e:
+            log("warning", f"InfluxDB get_history_hours error: {e}")
+            return []
