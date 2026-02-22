@@ -142,7 +142,6 @@ def main():
                     state.price_percentiles.get(80, 0)
                     - state.price_percentiles.get(20, 0)
                 )
-                now_utc = datetime.now(timezone.utc)
                 state.hours_cheap_remaining = sum(
                     1 for t in tariffs
                     if float(t.get("value", 1)) <= state.price_percentiles.get(30, 0.20)

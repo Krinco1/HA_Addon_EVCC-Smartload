@@ -1,6 +1,6 @@
 name: "EVCC-Smartload - Hybrid Optimizer"
 slug: evcc_smartload
-version: "5.0.2"
+version: "5.0.3"
 description: "Hybrid LP+RL · Percentil-Thresholds · Charge-Sequencer · Telegram-Notifications · Quiet Hours · Batterie→EV"
 url: "https://github.com/Krinco1/HA_Addon_EVCC-Smartload"
 arch:
@@ -45,6 +45,8 @@ options:
   quiet_hours_enabled: true
   quiet_hours_start: 21
   quiet_hours_end: 6
+  sequencer_enabled: true
+  decision_interval_minutes: 15
 schema:
   evcc_url: str
   evcc_password: password?
@@ -73,3 +75,5 @@ schema:
   quiet_hours_enabled: bool?
   quiet_hours_start: int?
   quiet_hours_end: int?
+  sequencer_enabled: bool?
+  decision_interval_minutes: int?

@@ -12,7 +12,7 @@ Design:
 
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 import requests
@@ -196,7 +196,7 @@ class NotificationManager:
 
         # Throttle: don't re-ask within 2 hours
         if vehicle_name in self.pending_inquiries:
-            age_h = (datetime.now() - self.pending_inquiries[vehicle_name]).total_seconds() / 3600
+            age_h = (datetime.now(timezone.utc) - self.pending_inquiries[vehicle_name]).total_seconds() / 3600
             if age_h < 2:
                 return False
 
@@ -216,7 +216,7 @@ class NotificationManager:
 
         success = self.bot.send_message(driver.telegram_chat_id, msg, keyboard)
         if success:
-            self.pending_inquiries[vehicle_name] = datetime.now()
+            self.pending_inquiries[vehicle_name] = datetime.now(timezone.utc)
             log("info", f"Telegram: charge inquiry sent to {driver.name} for {vehicle_name}")
         return success
 
@@ -297,7 +297,7 @@ class NotificationManager:
 
     def get_pending(self) -> Dict[str, str]:
         """Return pending inquiries with age for dashboard display."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         return {
             v: f"{(now - ts).total_seconds() / 60:.0f}min ago"
             for v, ts in self.pending_inquiries.items()

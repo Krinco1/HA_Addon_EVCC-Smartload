@@ -171,6 +171,7 @@ class DataCollector:
         ev_name = None
         ev_soc = 0.0
         ev_cap = 0.0
+        ev_power = 0.0
         ev_connected = False
 
         loadpoints = site.get("loadpoints", [])
@@ -178,6 +179,7 @@ class DataCollector:
             if lp.get("connected"):
                 ev_name = lp.get("vehicleName") or lp.get("vehicle")
                 ev_soc = float(lp.get("vehicleSoc", 0) or 0)
+                ev_power = float(lp.get("chargePower", 0) or 0)
                 ev_connected = True
                 # Try to get capacity from our vehicle data
                 vehicles = self.vehicle_monitor.get_all_vehicles()
@@ -198,9 +200,10 @@ class DataCollector:
             grid_power=float(grid_power),
             current_price=float(current_price),
             ev_connected=ev_connected,
-            ev_name=ev_name,
+            ev_name=ev_name or "",
             ev_soc=float(ev_soc),
             ev_capacity_kwh=float(ev_cap),
+            ev_power=float(ev_power),
         )
 
         with self._lock:

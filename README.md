@@ -1,4 +1,4 @@
-# EVCC-Smartload v5.0 — Hybrid LP+RL Optimizer
+# EVCC-Smartload v5.0.3 — Hybrid LP+RL Optimizer
 
 **Intelligentes Energiemanagement für Home Assistant** — optimiert Hausbatterie und EV-Ladung anhand dynamischer Strompreise, Solar-Prognosen und Fahrer-Präferenzen.
 
@@ -37,6 +37,8 @@ ev_max_price_ct: 30.0
 quiet_hours_enabled: true    # Kein EV-Wechsel nachts
 quiet_hours_start: 21
 quiet_hours_end: 6
+sequencer_enabled: true      # Multi-EV Ladeplanung
+decision_interval_minutes: 15 # Optimierungs-Zyklus
 ```
 
 ### vehicles.yaml (Fahrzeug-APIs)
@@ -81,7 +83,7 @@ drivers:
 | Methode | Endpoint | Beschreibung |
 |---|---|---|
 | GET | `/` | Dashboard (HTML) |
-| GET | `/health` | Heartbeat — `{"status":"ok","version":"5.0.0"}` |
+| GET | `/health` | Heartbeat — `{"status":"ok","version":"5.0.3"}` |
 | GET | `/status` | Vollständiger System-Status inkl. Percentile, RL-Reife |
 | GET | `/summary` | Kompakte Übersicht für externe Integrationen |
 | GET | `/config` | Aktive Konfiguration (read-only) |

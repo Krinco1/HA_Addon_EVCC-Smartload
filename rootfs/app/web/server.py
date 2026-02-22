@@ -262,7 +262,7 @@ class WebServer:
         lp = self._last_lp_action
         p = state.price_percentiles if state else {}
         return {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": VERSION,
             "rl_maturity": maturity,
             "current": {
@@ -315,7 +315,7 @@ class WebServer:
         vehicles = self.vehicle_monitor.get_all_vehicles()
         needs = self.vehicle_monitor.predict_charge_need()
         return {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "vehicles": {
                 name: {
                     "soc": v.get_effective_soc(),
@@ -349,7 +349,7 @@ class WebServer:
 
     def _api_rl_devices(self) -> dict:
         return {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "devices": self.rl_devices.get_all_devices(),
             "global_config": {
                 "auto_switch_enabled": self.cfg.rl_auto_switch,
@@ -544,6 +544,7 @@ class WebServer:
         # v5: add percentile lines to chart data
         state = self._last_state
         p20_ct = state.price_percentiles.get(20, 0) * 100 if state else 0
+        p30_ct = state.price_percentiles.get(30, 0) * 100 if state else 0
         p60_ct = state.price_percentiles.get(60, 0) * 100 if state else 0
 
         pv_now = state.pv_power / 1000 if state else 0
@@ -566,6 +567,7 @@ class WebServer:
             "ev_max_ct": self.cfg.ev_max_price_ct,
             # v5
             "p20_ct": round(p20_ct, 1),
+            "p30_ct": round(p30_ct, 1),
             "p60_ct": round(p60_ct, 1),
         }
 

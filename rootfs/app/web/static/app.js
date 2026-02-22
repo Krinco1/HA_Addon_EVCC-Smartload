@@ -100,8 +100,7 @@ function renderChart(data) {
     var batLimit = data.battery_max_ct || 35;
     var evLimit = data.ev_max_ct || 40;
     var hasSolar = data.has_solar_forecast || false;
-    var percentiles = data.percentiles || {};
-    var p30 = percentiles[30] || percentiles['30'] || null;
+    var p30 = data.p30_ct || null;  // already in ct from API
 
     // --- Layout constants ---
     var marginL = 38, marginR = hasSolar ? 42 : 12, marginT = 18, marginB = 32;
@@ -177,9 +176,9 @@ function renderChart(data) {
 
     // P30 Percentile line (EV cheapest 30% window) — NEW in v5
     if (p30 != null && p30 > 0) {
-        var p30Y = limitY(p30 * 100);  // p30 is in EUR, convert to ct
+        var p30Y = limitY(p30);  // p30 already in ct from API
         s += '<line x1="' + marginL + '" y1="' + p30Y + '" x2="' + (W - marginR) + '" y2="' + p30Y + '" stroke="#00ffcc" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.8"/>';
-        s += '<text x="' + (marginL + 3) + '" y="' + (p30Y - 3) + '" fill="#00ffcc" font-size="8" font-family="sans-serif">\u26A1 P30 ' + (p30 * 100).toFixed(1) + 'ct</text>';
+        s += '<text x="' + (marginL + 3) + '" y="' + (p30Y - 3) + '" fill="#00ffcc" font-size="8" font-family="sans-serif">\u26A1 P30 ' + p30.toFixed(1) + 'ct</text>';
     }
 
     var batY = limitY(batLimit);
@@ -199,7 +198,7 @@ function renderChart(data) {
         var bx = marginL + i * barW + barGap / 2;
         var by = marginT + plotH - barH;
         var col = priceColor(p.price_ct);
-        var isCheapP30 = p30 != null && p.price_ct <= (p30 * 100);
+        var isCheapP30 = p30 != null && p.price_ct <= p30;
 
         // Cheap P30 highlight (subtle glow)
         if (isCheapP30) {
@@ -253,7 +252,7 @@ function renderChart(data) {
             var html = '<div class="tt-time">' + p.hour + ':00</div>';
             html += '<div class="tt-price" style="color:' + priceColor(p.price_ct) + ';">' + p.price_ct.toFixed(1) + ' ct/kWh</div>';
             if (p.solar_kw > 0) html += '<div class="tt-solar">\u2600\uFE0F ' + p.solar_kw.toFixed(1) + ' kW</div>';
-            if (p30 != null && p.price_ct <= (p30 * 100)) html += '<div style="color:#00ffcc;font-size:0.9em;">\u26A1 G\u00FCnstigstes 30%-Fenster \u2713</div>';
+            if (p30 != null && p.price_ct <= p30) html += '<div style="color:#00ffcc;font-size:0.9em;">\u26A1 G\u00FCnstigstes 30%-Fenster \u2713</div>';
             if (p.price_ct <= batLimit) html += '<div style="color:#00d4ff;font-size:0.9em;">\uD83D\uDD0B Batterie-Laden \u2713</div>';
             if (p.price_ct <= evLimit) html += '<div style="color:#ff88ff;font-size:0.9em;">\uD83D\uDD0C EV-Laden \u2713</div>';
             tooltip.innerHTML = html;
@@ -281,7 +280,7 @@ function renderChart(data) {
         summaryHtml += '<span style="color:#ffdd00;">\uD83D\uDCC8 Prognose: ' + totalKwh.toFixed(0) + ' kWh</span>';
     }
     if (p30 != null) {
-        summaryHtml += '<span style="color:#00ffcc;">\u26A1 P30: ' + (p30 * 100).toFixed(1) + 'ct</span>';
+        summaryHtml += '<span style="color:#00ffcc;">\u26A1 P30: ' + p30.toFixed(1) + 'ct</span>';
     }
     if (summaryHtml) {
         var sumEl = document.createElement('div');
@@ -587,7 +586,7 @@ function renderConfig(s) {
         ['Dynamische Grenze', cfg.bat_to_ev_dynamic ? '\u2705 aktiv' : '\u274C aus'],
         ['Entlade-Untergrenze', (cfg.bat_to_ev_floor || 20) + '%'],
         ['Ruhezeit', cfg.quiet_hours_enabled ?
-            '\u{1F634} ' + (cfg.quiet_hours || '21:00–06:00') :
+            '\u{1F634} ' + (cfg.quiet_hours_start || 21) + ':00\u2013' + (cfg.quiet_hours_end || 6) + ':00' :
             '\u274C deaktiviert'],
     ];
     var h = '';
@@ -599,26 +598,39 @@ function renderConfig(s) {
 function renderSequencer(data) {
     var card = $('sequencerCard');
     if (!card) return;
+    if (!data.enabled) { card.style.display = 'none'; return; }
 
-    var requests = data.requests || [];
+    card.style.display = '';
+
+    var requestsDict = data.requests || {};
     var schedule = data.schedule || [];
     var quietHours = data.quiet_hours || {};
-    var isQuiet = data.is_quiet_now || false;
-    var preQuiet = data.pre_quiet_recommendation || null;
+    var isQuiet = quietHours.currently_active || false;
+    var preQuiet = quietHours.pre_quiet_recommendation || null;
 
-    var h = '';
+    // Convert requests dict to array with vehicle name included
+    var requests = [];
+    var reqKeys = Object.keys(requestsDict);
+    for (var ri = 0; ri < reqKeys.length; ri++) {
+        var rk = reqKeys[ri];
+        var rObj = requestsDict[rk];
+        rObj.vehicle = rk;
+        requests.push(rObj);
+    }
 
     // Quiet Hours status badge
-    if (quietHours.enabled) {
+    var quietBadge = $('quietBadge');
+    if (quietHours.enabled && quietBadge) {
         var qColor = isQuiet ? '#ffaa00' : '#555';
         var qIcon = isQuiet ? '\uD83D\uDE34' : '\uD83D\uDD14';
-        h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">';
-        h += '<span style="background:' + qColor + '22;border:1px solid ' + qColor + ';border-radius:12px;padding:3px 10px;font-size:0.85em;color:' + qColor + ';">';
-        h += qIcon + ' Ruhezeit ' + quietHours.start + ':00–' + quietHours.end + ':00';
-        if (isQuiet) h += ' \u2014 aktiv';
-        h += '</span>';
-        h += '</div>';
+        var qHtml = '<span style="background:' + qColor + '22;border:1px solid ' + qColor + ';border-radius:12px;padding:3px 10px;font-size:0.85em;color:' + qColor + ';">';
+        qHtml += qIcon + ' Ruhezeit ' + quietHours.start + ':00\u2013' + quietHours.end + ':00';
+        if (isQuiet) qHtml += ' \u2014 aktiv';
+        qHtml += '</span>';
+        quietBadge.innerHTML = qHtml;
     }
+
+    var h = '';
 
     // Pre-quiet recommendation banner
     if (preQuiet) {
@@ -630,7 +642,7 @@ function renderSequencer(data) {
 
     // Charge requests
     if (requests.length > 0) {
-        h += '<div style="font-size:0.85em;color:#888;margin-bottom:6px;">Ladewünsche:</div>';
+        h += '<div style="font-size:0.85em;color:#888;margin-bottom:6px;">Ladew\u00FCnsche:</div>';
         h += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">';
         for (var i = 0; i < requests.length; i++) {
             var req = requests[i];
@@ -645,22 +657,22 @@ function renderSequencer(data) {
             h += '<span style="font-weight:bold;">' + escapeHtml(req.vehicle) + '</span>';
             h += ' <span style="color:#888;font-size:0.85em;">(' + escapeHtml(req.driver || '') + ')</span>';
             h += '<br><span style="color:#888;font-size:0.85em;">';
-            h += req.current_soc.toFixed(0) + '% \u2192 ' + req.target_soc + '% ';
-            h += '<span style="color:#00d4ff;">(' + req.need_kwh.toFixed(1) + ' kWh)</span>';
+            h += req.current_soc + '% \u2192 ' + req.target_soc + '% ';
+            h += '<span style="color:#00d4ff;">(' + req.need_kwh + ' kWh)</span>';
             h += '</span></div>';
             h += '<div style="text-align:right;">';
             h += '<span style="color:' + statusColor + ';font-size:0.9em;">' + statusIcon + ' ' + req.status + '</span>';
-            h += '<br><button class="seq-cancel-btn" onclick="cancelSeqRequest(\'' + req.vehicle + '\')" style="margin-top:4px;font-size:0.75em;padding:2px 6px;">\u274C</button>';
+            h += '<br><button class="seq-cancel-btn" onclick="cancelSeqRequest(\'' + escapeHtml(req.vehicle) + '\')" style="margin-top:4px;font-size:0.75em;padding:2px 6px;">\u274C</button>';
             h += '</div></div>';
         }
         h += '</div>';
     } else {
-        h += '<div style="color:#555;font-size:0.9em;margin-bottom:12px;">Keine aktiven Ladewünsche. ';
-        h += 'Fahrzeug anstecken und per Telegram Ziel-SoC bestätigen, oder:</div>';
+        h += '<div style="color:#555;font-size:0.9em;margin-bottom:12px;">Keine aktiven Ladew\u00FCnsche. ';
+        h += 'Fahrzeug anstecken und per Telegram Ziel-SoC best\u00E4tigen, oder:</div>';
     }
 
     // Add request button
-    h += '<button class="seq-add-btn" onclick="openSeqModal()">\u2795 Ladewunsch hinzufügen</button>';
+    h += '<button class="seq-add-btn" onclick="openSeqModal()">\u2795 Ladewunsch hinzuf\u00FCgen</button>';
 
     // Schedule
     if (schedule.length > 0) {
@@ -672,17 +684,17 @@ function renderSequencer(data) {
                            slot.source === 'grid_cheap' ? '#00ff88' : '#ffaa00';
             var srcIcon = slot.source === 'solar' ? '\u2600\uFE0F' :
                           slot.source === 'grid_cheap' ? '\u26A1' : '\uD83D\uDD0C';
-            var startH = slot.start ? new Date(slot.start).getHours() + ':00' : '--';
-            var endH = slot.end ? new Date(slot.end).getHours() + ':00' : '--';
+            var startH = slot.start_local || (slot.start ? new Date(slot.start).getHours() + ':00' : '--');
+            var endH = slot.end_local || (slot.end ? new Date(slot.end).getHours() + ':00' : '--');
             h += '<div style="background:#16213e;border-left:3px solid ' + srcColor + ';border-radius:4px;padding:6px 10px;display:flex;justify-content:space-between;font-size:0.85em;">';
-            h += '<span>' + srcIcon + ' <strong>' + escapeHtml(slot.vehicle) + '</strong> ' + startH + '–' + endH + '</span>';
-            h += '<span style="color:' + srcColor + ';">' + slot.kwh.toFixed(1) + ' kWh @ ' + slot.price_ct.toFixed(1) + 'ct</span>';
+            h += '<span>' + srcIcon + ' <strong>' + escapeHtml(slot.vehicle) + '</strong> ' + startH + '\u2013' + endH + '</span>';
+            h += '<span style="color:' + srcColor + ';">' + slot.kwh + ' kWh @ ' + slot.price_ct + 'ct</span>';
             h += '</div>';
         }
         h += '</div>';
     }
 
-    card.querySelector('.card-content') ? (card.querySelector('.card-content').innerHTML = h) : (card.innerHTML = '<h3 style="color:#00d4ff;margin-bottom:12px;">\uD83D\uDD0C Ladeplanung</h3>' + h);
+    $('seqRequests').innerHTML = h;
 }
 
 // ---- Sequencer Modal ----

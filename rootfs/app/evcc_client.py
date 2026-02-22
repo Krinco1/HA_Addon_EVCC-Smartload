@@ -59,7 +59,6 @@ class EvccClient:
                 continue
             try:
                 from datetime import datetime as dt
-                import re as _re
                 # ISO8601 parse (basic)
                 ts = dt.fromisoformat(start.replace("Z", "+00:00")) if start else None
                 te = dt.fromisoformat(end.replace("Z", "+00:00")) if end else None
