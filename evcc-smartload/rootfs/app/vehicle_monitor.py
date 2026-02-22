@@ -57,15 +57,23 @@ class VehicleMonitor:
                 for name in names:
                     last = self._last_poll.get(name, 0)
                     if name in refresh_now or (now - last) >= self._poll_interval_sec:
-                        log("debug", f"VehicleMonitor: polling {name}")
+                        log("info", f"VehicleMonitor: polling {name}...")
                         result = self._manager.poll_vehicle(name)
                         self._last_poll[name] = time.time()
+
+                        # Always update last_poll on VehicleData (even on failure)
+                        vdata = self._manager.get_vehicle(name)
+                        if vdata:
+                            vdata.last_poll = datetime.now(timezone.utc)
+
                         if result:
                             # Apply manual SoC override if present
                             manual = self.manual_store.get(name)
                             if manual is not None:
                                 result.manual_soc = manual
-                            log("debug", f"VehicleMonitor: {name} SoC={result.get_effective_soc():.1f}%")
+                            log("info", f"VehicleMonitor: {name} SoC={result.get_effective_soc():.1f}% (source={result.data_source})")
+                        else:
+                            log("warning", f"VehicleMonitor: {name} poll returned no data")
 
                 # Apply manual SoC overrides to all vehicles
                 for name, v in self._manager.get_all_vehicles().items():
