@@ -1,6 +1,6 @@
 name: "EVCC-Smartload - Hybrid Optimizer"
 slug: evcc_smartload
-version: "5.0.0"
+version: "5.0.2"
 description: "Hybrid LP+RL · Percentil-Thresholds · Charge-Sequencer · Telegram-Notifications · Quiet Hours · Batterie→EV"
 url: "https://github.com/Krinco1/HA_Addon_EVCC-Smartload"
 arch:
@@ -25,6 +25,7 @@ options:
   influxdb_database: "smartload"
   influxdb_username: "smartload"
   influxdb_password: "smartload"
+  influxdb_ssl: false
   battery_capacity_kwh: 33.1
   battery_max_price_ct: 25.0
   battery_charge_efficiency: 0.92
@@ -52,6 +53,7 @@ schema:
   influxdb_database: str
   influxdb_username: str
   influxdb_password: password
+  influxdb_ssl: bool?
   battery_capacity_kwh: float
   battery_max_price_ct: float
   battery_charge_efficiency: float?

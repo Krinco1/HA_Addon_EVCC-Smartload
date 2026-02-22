@@ -2,6 +2,45 @@
 
 ---
 
+## v5.0.2 — Bugfixes: ManualSocStore · InfluxDB SSL
+
+### Bugfixes
+
+**ManualSocStore.get() gab dict statt float zurück**
+- `set()` speichert `{"soc": 80, "timestamp": "..."}`, aber `get()` gab das gesamte dict zurück
+- Verursachte `TypeError: '>' not supported between instances of 'dict' and 'int'` in:
+  - `vehicle_monitor.py:102` (predict_charge_need)
+  - `comparator.py:194` (EV-SoC Vergleiche)
+  - `web/server.py` (API-Responses)
+  - `main.py:276` (Hauptschleife)
+- Fix: `get()` extrahiert jetzt den `soc`-Wert als float
+- Zusätzlich: `get_timestamp()` Methode für sauberen Timestamp-Zugriff
+- Defensive Absicherung in `get_effective_soc()` gegen dict-Typ
+
+**InfluxDB SSL-Support**
+- InfluxDB-Client war hardcoded auf `http://` — bei aktiviertem SSL im InfluxDB-Addon kam HTTP 401
+- Neue Config-Option `influxdb_ssl: true/false` (Default: false)
+- SSL-Kontext akzeptiert selbstsignierte Zertifikate (lokales Netzwerk)
+- Protokoll-Erkennung beim Start geloggt
+
+### Geänderte Dateien
+- `rootfs/app/state.py` — ManualSocStore.get() + get_timestamp() + defensive get_effective_soc()
+- `rootfs/app/influxdb_client.py` — SSL-Support mit konfigurierbarem Protokoll
+- `rootfs/app/config.py` — neues Feld `influxdb_ssl: bool`
+- `config.yaml` — Option `influxdb_ssl` + Schema-Eintrag
+- `rootfs/app/version.py` — 5.0.2
+
+### Neue Konfigurationsfelder
+```yaml
+influxdb_ssl: true   # Default: false — auf true setzen wenn InfluxDB SSL aktiviert hat
+```
+
+### Rückwärtskompatibilität
+- `influxdb_ssl` Default ist `false` → bestehende HTTP-Setups unverändert
+- ManualSocStore-Fix ist transparent — bestehende JSON-Daten werden korrekt gelesen
+
+---
+
 ## v5.0.0 — Percentil-Optimierung · Charge-Sequencer · Telegram
 
 ### Neue Features
@@ -34,7 +73,6 @@
 - Neuer API-Endpoint: `GET /drivers`
 
 ### Geänderte Konfigurationsfelder
-
 Neue optionale Felder in `config.yaml` (Defaults = Bestandsverhalten):
 ```yaml
 quiet_hours_enabled: true   # Standard: true
@@ -43,7 +81,6 @@ quiet_hours_end: 6          # Bis wann kein EV-Wechsel
 ```
 
 ### Rückwärtskompatibilität
-
 - Alle bestehenden `config.yaml`-Felder bleiben unverändert
 - `vehicles.yaml` Format bleibt identisch
 - `drivers.yaml` ist optional — ohne Datei läuft alles wie bisher
@@ -51,7 +88,6 @@ quiet_hours_end: 6          # Bis wann kein EV-Wechsel
 - RL Q-Table Reset notwendig (State Space ändert sich) — RL lernt in ~2 Tagen vom LP neu
 
 ### Was sich NICHT ändert
-
 - Dashboard URL: `http://homeassistant:8099`
 - Alle bestehenden API-Endpunkte
 - Vehicle Providers (KIA, Renault, Custom, Manual, evcc)
@@ -63,21 +99,18 @@ quiet_hours_end: 6          # Bis wann kein EV-Wechsel
 ---
 
 ## v4.3.11 — SVG-Chart Redesign · Dashboard-Verbesserungen
-
 - SVG-Preischart vollständig neu (Y-Achse, Gitter, Solar-Fläche, Tooltip)
 - Batterie-Entladetiefe mit dynamischem bufferSoc via evcc API
 - Energiebilanz mit Echtzeit-Werten (PV, Haus, Netz, Batterie)
 - Decision-Log mit Kategorien (observe, plan, action, warning, rl)
 
 ## v4.3.x — Batterie→EV Entladung · Dynamic Discharge
-
 - evcc bufferSoc/prioritySoc/bufferStartSoc dynamisch berechnet
 - Solar-Prognose-Integration für Entladetiefenberechnung
 - Case-insensitive Fahrzeug-Matching korrigiert
 - RL Pro-Device Control (Batterie + EVs einzeln steuerbar)
 
 ## v4.0.0 — Hybrid LP+RL
-
 - Dualer Optimierungsansatz: Linear Programming + Reinforcement Learning
 - Comparator: automatischer LP↔RL Switch nach Leistungsmetriken
 - Neue Dashboard-Panels: RL-Reife, Vergleiche, Entscheidungs-Log

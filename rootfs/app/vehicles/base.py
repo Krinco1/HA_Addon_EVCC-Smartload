@@ -3,11 +3,14 @@ Base vehicle data model for EVCC-Smartload.
 
 All vehicle providers return VehicleData instances.
 Vehicle-specific data is fetched by provider classes in this package.
+
+v5.0.2: Defensive type check in get_effective_soc() against dict-type manual_soc.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+
 
 # SoC data older than this is considered stale
 STALE_THRESHOLD_MINUTES = 60
@@ -21,8 +24,8 @@ class VehicleData:
     capacity_kwh: float = 0.0
 
     # State of Charge
-    soc: Optional[float] = None           # Last known SoC from API / evcc
-    manual_soc: Optional[float] = None    # Manual override (from dashboard)
+    soc: Optional[float] = None         # Last known SoC from API / evcc
+    manual_soc: Optional[float] = None  # Manual override (from dashboard)
 
     # Derived
     range_km: Optional[float] = None
@@ -30,18 +33,30 @@ class VehicleData:
     connected_to_wallbox: bool = False
 
     # Timestamps
-    last_update: Optional[datetime] = None    # When SoC data was last received
-    last_poll: Optional[datetime] = None      # When we last attempted a poll
+    last_update: Optional[datetime] = None   # When SoC data was last received
+    last_poll: Optional[datetime] = None     # When we last attempted a poll
 
     # Metadata
-    data_source: str = "unknown"   # "api", "evcc", "manual", "cache"
+    data_source: str = "unknown"             # "api", "evcc", "manual", "cache"
     charge_power_kw: Optional[float] = None
     provider_type: str = "unknown"
 
     def get_effective_soc(self) -> float:
-        """Return the best available SoC value (manual override > API > 50%)."""
-        if self.manual_soc is not None:
-            return self.manual_soc
+        """Return the best available SoC value (manual override > API > 50%).
+
+        v5.0.2: Defensive check — if manual_soc is accidentally a dict
+        (from ManualSocStore bug), extract the 'soc' value.
+        """
+        manual = self.manual_soc
+        if manual is not None:
+            # Defensive: handle dict from ManualSocStore bug
+            if isinstance(manual, dict):
+                manual = manual.get("soc")
+            if manual is not None:
+                try:
+                    return float(manual)
+                except (TypeError, ValueError):
+                    pass
         if self.soc is not None:
             return self.soc
         return 50.0
@@ -49,7 +64,7 @@ class VehicleData:
     def is_data_stale(self) -> bool:
         """Return True if SoC data is older than STALE_THRESHOLD_MINUTES."""
         if self.manual_soc is not None:
-            return False   # Manual overrides are never stale
+            return False  # Manual overrides are never stale
         if self.last_update is None:
             return True
         age = datetime.now(timezone.utc) - self.last_update.astimezone(timezone.utc)
@@ -83,8 +98,8 @@ class VehicleData:
             return f"vor {mins}min"
         return f"vor {mins // 60}h {mins % 60}min"
 
-    def update_from_evcc(self, evcc_soc: Optional[float], connected: bool,
-                          charging: bool):
+    def update_from_evcc(self, evcc_soc: Optional[float],
+                         connected: bool, charging: bool):
         """Update vehicle state from evcc websocket data."""
         self.connected_to_wallbox = connected
         self.charging = charging
