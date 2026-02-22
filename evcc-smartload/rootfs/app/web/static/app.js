@@ -99,6 +99,8 @@ function renderChart(data) {
 
     var batLimit = data.battery_max_ct || 35;
     var evLimit = data.ev_max_ct || 40;
+    var activeBat = data.active_battery_ct || null;
+    var activeEv = data.active_ev_ct || null;
     var hasSolar = data.has_solar_forecast || false;
     var percentiles = data.percentiles || {};
     var p30 = percentiles[30] || percentiles['30'] || null;
@@ -190,6 +192,18 @@ function renderChart(data) {
         var evY = limitY(evLimit);
         s += '<line x1="' + marginL + '" y1="' + evY + '" x2="' + (W - marginR) + '" y2="' + evY + '" stroke="#ff88ff" stroke-width="1" stroke-dasharray="6,3" opacity="0.7"/>';
         s += '<text x="' + (W - marginR - 2) + '" y="' + (evY - 3) + '" fill="#ff88ff" font-size="8" text-anchor="end" font-family="sans-serif">\uD83D\uDD0C ' + evLimit + 'ct</text>';
+    }
+
+    // Active dynamic limits (solid lines — the ACTUAL applied thresholds)
+    if (activeBat != null && activeBat > 0 && Math.abs(activeBat - batLimit) > 0.5) {
+        var abY = limitY(activeBat);
+        s += '<line x1="' + marginL + '" y1="' + abY + '" x2="' + (W - marginR) + '" y2="' + abY + '" stroke="#00d4ff" stroke-width="1.8" opacity="0.9"/>';
+        s += '<text x="' + (marginL + 3) + '" y="' + (abY - 3) + '" fill="#00d4ff" font-size="8" font-family="sans-serif">\uD83D\uDD0B\u21D2 ' + activeBat + 'ct</text>';
+    }
+    if (activeEv != null && activeEv > 0 && Math.abs(activeEv - evLimit) > 0.5) {
+        var aeY = limitY(activeEv);
+        s += '<line x1="' + marginL + '" y1="' + aeY + '" x2="' + (W - marginR) + '" y2="' + aeY + '" stroke="#ff88ff" stroke-width="1.8" opacity="0.9"/>';
+        s += '<text x="' + (marginL + 3) + '" y="' + (aeY - 3) + '" fill="#ff88ff" font-size="8" font-family="sans-serif">\uD83D\uDD0C\u21D2 ' + activeEv + 'ct</text>';
     }
 
     // Price bars
@@ -578,9 +592,11 @@ async function setRLMode(device, mode) {
 // ---- Config ----
 function renderConfig(s) {
     var cfg = s.config || {};
+    var batActive = cfg.active_battery_ct != null ? ' \u2192 ' + cfg.active_battery_ct + 'ct' : '';
+    var evActive = cfg.active_ev_ct != null ? ' \u2192 ' + cfg.active_ev_ct + 'ct' : '';
     var rows = [
-        ['Batterie max', (cfg.battery_max_ct || 0) + 'ct'],
-        ['EV max', (cfg.ev_max_ct || 0) + 'ct'],
+        ['Batterie max', (cfg.battery_max_ct || 0) + 'ct' + batActive],
+        ['EV max', (cfg.ev_max_ct || 0) + 'ct' + evActive],
         ['EV Deadline', cfg.ev_deadline || '--'],
         ['Roundtrip-Eff.', ((cfg.battery_charge_eff || 0.92) * (cfg.battery_discharge_eff || 0.92) * 100).toFixed(1) + '%'],
         ['Bat\u2192EV Min-Vorteil', (cfg.bat_to_ev_min_ct || 3) + 'ct'],
