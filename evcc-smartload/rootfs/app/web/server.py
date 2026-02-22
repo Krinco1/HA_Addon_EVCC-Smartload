@@ -360,9 +360,13 @@ class WebServer:
         }
 
     def _api_config(self) -> dict:
+        lp = self._last_lp_action
         return {
             "battery_max_ct": self.cfg.battery_max_price_ct,
             "ev_max_ct": self.cfg.ev_max_price_ct,
+            # Active dynamic limits (from last optimizer decision)
+            "active_battery_ct": round(lp.battery_limit_eur * 100, 1) if lp and lp.battery_limit_eur else None,
+            "active_ev_ct": round(lp.ev_limit_eur * 100, 1) if lp and lp.ev_limit_eur else None,
             "ev_deadline": f"{self.cfg.ev_charge_deadline_hour}:00",
             "decision_interval_minutes": self.cfg.decision_interval_minutes,
             "battery_charge_eff": self.cfg.battery_charge_efficiency,
@@ -552,6 +556,11 @@ class WebServer:
         bat_power = state.battery_power / 1000 if state else 0
         total_solar_kwh = sum(solar_by_hour.values())
 
+        # Active dynamic limits (from last optimizer decision)
+        lp = self._last_lp_action
+        active_bat_ct = round(lp.battery_limit_eur * 100, 1) if lp and lp.battery_limit_eur else None
+        active_ev_ct = round(lp.ev_limit_eur * 100, 1) if lp and lp.ev_limit_eur else None
+
         return {
             "prices": prices,
             "has_solar_forecast": len(solar_by_hour) > 0,
@@ -564,9 +573,12 @@ class WebServer:
             "current_price_ct": round(state.current_price * 100, 1) if state else None,
             "battery_max_ct": self.cfg.battery_max_price_ct,
             "ev_max_ct": self.cfg.ev_max_price_ct,
-            # v5
+            # v5: percentile lines
             "p20_ct": round(p20_ct, 1),
             "p60_ct": round(p60_ct, 1),
+            # v5.0.4: active dynamic limits from optimizer
+            "active_battery_ct": active_bat_ct,
+            "active_ev_ct": active_ev_ct,
         }
 
     # ------------------------------------------------------------------

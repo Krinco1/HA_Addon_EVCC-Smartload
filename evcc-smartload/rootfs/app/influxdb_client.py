@@ -2,19 +2,20 @@
 InfluxDB 1.x client for EVCC-Smartload.
 
 Writes energy metrics to InfluxDB for historical analysis.
-
-v5.0.2: Added SSL support (influxdb_ssl config option).
-        Handles self-signed certificates on local networks.
+Uses the requests library for reliable HTTPS + auth handling.
 """
 
-from datetime import datetime, timezone
-from typing import Optional
+import requests
+import urllib3
 
 from logging_util import log
 
+# Suppress InsecureRequestWarning for self-signed certs on local network
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 class InfluxDBClient:
-    """Simple InfluxDB v1 HTTP writer."""
+    """Simple InfluxDB v1 HTTP writer using requests."""
 
     def __init__(self, cfg):
         self.host = cfg.influxdb_host
@@ -26,35 +27,20 @@ class InfluxDBClient:
         self._ssl = getattr(cfg, "influxdb_ssl", False)
         scheme = "https" if self._ssl else "http"
         self._base_url = f"{scheme}://{self.host}:{self.port}"
+        # For self-signed certs on local network: don't verify
+        self._verify = False if self._ssl else True
+        self._auth = (self.username, self.password) if self.username else None
 
         if self._enabled:
-            log("info", f"InfluxDB: {self._base_url} (SSL={'on' if self._ssl else 'off'})")
-
-    def _get_ssl_context(self):
-        """Create SSL context that accepts self-signed certificates (local network)."""
-        if not self._ssl:
-            return None
-        import ssl
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
-
-    def _auth_params(self) -> str:
-        """Return URL query string for InfluxDB authentication."""
-        if not self.username:
-            return ""
-        import urllib.parse
-        return f"&u={urllib.parse.quote(self.username)}&p={urllib.parse.quote(self.password)}"
+            log("info", f"InfluxDB: {self._base_url} "
+                        f"(SSL={'on' if self._ssl else 'off'}, "
+                        f"user={self.username or 'none'})")
 
     def write(self, measurement: str, fields: dict, tags: dict = None):
         """Write a data point to InfluxDB."""
         if not self._enabled:
             return
         try:
-            import urllib.request
-            import urllib.parse
-
             tag_str = ""
             if tags:
                 tag_str = "," + ",".join(f"{k}={v}" for k, v in tags.items())
@@ -67,21 +53,25 @@ class InfluxDBClient:
             )
 
             line = f"{measurement}{tag_str} {field_str}"
-            url = (f"{self._base_url}/write"
-                   f"?db={urllib.parse.quote(self.database)}"
-                   f"&precision=s{self._auth_params()}")
 
-            req = urllib.request.Request(
-                url,
+            resp = requests.post(
+                f"{self._base_url}/write",
+                params={"db": self.database, "precision": "s"},
                 data=line.encode(),
-                method="POST",
+                auth=self._auth,
+                verify=self._verify,
+                timeout=5,
             )
 
-            ssl_ctx = self._get_ssl_context()
-            with urllib.request.urlopen(req, timeout=5, context=ssl_ctx) as resp:
-                if resp.status not in (200, 204):
-                    log("warning", f"InfluxDB write returned {resp.status}")
+            if resp.status_code == 401:
+                log("warning", f"InfluxDB auth failed (401) — check username/password "
+                               f"for {self._base_url}")
+            elif resp.status_code not in (200, 204):
+                log("warning", f"InfluxDB write returned {resp.status_code}: "
+                               f"{resp.text[:200]}")
 
+        except requests.exceptions.ConnectionError as e:
+            log("warning", f"InfluxDB connection error: {e}")
         except Exception as e:
             log("warning", f"InfluxDB write error: {e}")
 
@@ -110,7 +100,7 @@ class InfluxDBClient:
             fields["battery_action"] = int(action.battery_action)
             fields["ev_action"] = int(action.ev_action)
 
-        self.write("smartload_state", fields)
+        self.write("Smartprice", fields)
 
     def get_history_hours(self, hours: int = 24) -> list:
         """Return recent state history from InfluxDB (for RL bootstrap).
@@ -118,19 +108,21 @@ class InfluxDBClient:
         if not self._enabled:
             return []
         try:
-            import urllib.request, urllib.parse, json as _json
             query = (f"SELECT mean(price_ct), mean(battery_soc), mean(pv_power) "
-                     f"FROM smartload_state "
+                     f"FROM Smartprice "
                      f"WHERE time > now() - {hours}h "
                      f"GROUP BY time(1h) fill(none)")
-            url = (f"{self._base_url}/query"
-                   f"?db={urllib.parse.quote(self.database)}"
-                   f"&q={urllib.parse.quote(query)}"
-                   f"{self._auth_params()}")
-            req = urllib.request.Request(url)
-            ssl_ctx = self._get_ssl_context()
-            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
-                data = _json.loads(resp.read())
+
+            resp = requests.get(
+                f"{self._base_url}/query",
+                params={"db": self.database, "q": query},
+                auth=self._auth,
+                verify=self._verify,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
             results = []
             for series in data.get("results", [{}])[0].get("series", []):
                 for row in series.get("values", []):
