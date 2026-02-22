@@ -1,9 +1,9 @@
 """
 Configuration management for EVCC-Smartload.
 
-Loads configuration from Home Assistant's options.json and provides typed defaults.
-Vehicle providers are loaded from a separate /config/vehicles.yaml file.
-Driver / Telegram config from /config/drivers.yaml.
+Loads configuration from Home Assistant's options.json and provides typed
+defaults. Vehicle providers are loaded from a separate /config/vehicles.yaml
+file. Driver / Telegram config from /config/drivers.yaml.
 """
 
 import json
@@ -42,6 +42,7 @@ class Config:
     influxdb_database: str = "smartprice"
     influxdb_username: str = "smartprice"
     influxdb_password: str = "smartprice"
+    influxdb_ssl: bool = False          # v5.0.2: HTTPS for InfluxDB connection
 
     # --- Home battery ---
     battery_capacity_kwh: float = 33.1
@@ -92,8 +93,8 @@ class Config:
 
     # --- v5: Quiet Hours (no EV plug-switching during night) ---
     quiet_hours_enabled: bool = True
-    quiet_hours_start: int = 21   # 21:00
-    quiet_hours_end: int = 6      # 06:00
+    quiet_hours_start: int = 21       # 21:00
+    quiet_hours_end: int = 6          # 06:00
 
     # --- v5: Charge Sequencer ---
     sequencer_enabled: bool = True
@@ -121,7 +122,6 @@ def _load_vehicle_providers() -> List[Dict]:
         with open(path, "r") as f:
             data = yaml.safe_load(f) or {}
         raw_vehicles = data.get("vehicles", []) or []
-
         providers = []
         for v in raw_vehicles:
             mapped = dict(v)
@@ -154,12 +154,10 @@ def load_config() -> Config:
         with open(OPTIONS_PATH, "r") as f:
             raw = json.load(f)
         log("debug", f"Loaded options: {list(raw.keys())}")
-
         cfg = Config()
         for k, v in raw.items():
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
-
         cfg.vehicle_providers = _load_vehicle_providers()
         return cfg
     except Exception as e:
