@@ -2678,14 +2678,14 @@ function pollNow(vehicleName) {
             return;
         }
         // Success — start short-poll loop
-        var deadline = Date.now() + 30000;
+        var deadline = Date.now() + 60000;
         var interval = setInterval(function() {
             if (Date.now() > deadline) {
                 clearInterval(interval);
                 delete _pollIntervals[vehicleName];
                 btn.innerHTML = 'Poll Now';
                 btn.disabled = false;
-                if (errorEl) errorEl.textContent = 'Kein Update innerhalb 30s';
+                if (errorEl) errorEl.textContent = 'Kein Update innerhalb 60s';
                 return;
             }
             fetch('/vehicles')

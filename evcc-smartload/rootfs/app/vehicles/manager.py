@@ -66,7 +66,7 @@ class VehicleManager:
         """Return raw config dict for a vehicle (for poll_interval etc.)."""
         return self._vehicle_configs.get(name, {})
 
-    def poll_vehicle(self, name: str) -> Optional[VehicleData]:
+    def poll_vehicle(self, name: str, force: bool = False) -> Optional[VehicleData]:
         """Poll a specific vehicle's SoC from its API provider."""
         provider = self.providers.get(name)
         if provider is None:
@@ -74,7 +74,7 @@ class VehicleManager:
         if not getattr(provider, "supports_active_poll", False):
             return None  # evcc-only vehicles don't poll
 
-        result = provider.poll()
+        result = provider.poll(force=force)
         if result:
             # Merge into existing data, preserve wallbox state from evcc
             existing = self._vehicle_data.get(name)

@@ -10,8 +10,8 @@ RUN apk add --no-cache \
         pyyaml \
         numpy \
         requests \
-        hyundai-kia-connect-api \
-        renault-api \
+        "hyundai-kia-connect-api>=3.44,<4" \
+        "renault-api>=0.5,<1" \
         aiohttp
 
 # Copy application files

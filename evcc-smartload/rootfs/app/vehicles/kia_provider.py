@@ -1,5 +1,5 @@
 """
-KIA/Hyundai Vehicle Provider — v6 (Phase 9 fix).
+KIA/Hyundai Vehicle Provider — v6.2 (Poll Now fix).
 
 Uses hyundai-kia-connect-api (ccapi) to fetch SoC.
 Supports KIA, Hyundai, Genesis vehicles with connected services.
@@ -18,6 +18,7 @@ config.yaml example:
 """
 
 import time
+import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -63,17 +64,24 @@ class KiaProvider:
         self._failure_count = 0
         self._backoff_until = 0.0
 
-    def poll(self) -> Optional[VehicleData]:
-        """Fetch SoC from KIA/Hyundai API with persistent manager and progressive backoff."""
+    def poll(self, force: bool = False) -> Optional[VehicleData]:
+        """Fetch SoC from KIA/Hyundai API.
+
+        Args:
+            force: If True, request fresh data from vehicle (used by Poll Now).
+                   If False, use cached server-side data (scheduled polls).
+        """
+        RateLimitError = None
         try:
             from hyundai_kia_connect_api import VehicleManager as KiaVehicleManager
             try:
                 from hyundai_kia_connect_api import exceptions as kia_exceptions
                 RateLimitError = kia_exceptions.RateLimitingError
             except (ImportError, AttributeError):
-                RateLimitError = None
+                pass
 
             if self._manager is None:
+                log("info", f"KiaProvider {self.evcc_name}: initializing VehicleManager...")
                 self._manager = KiaVehicleManager(
                     region=self.region,
                     brand=self.brand,
@@ -81,8 +89,16 @@ class KiaProvider:
                     password=self.password,
                     pin=self.pin,
                 )
+                log("info", f"KiaProvider {self.evcc_name}: VehicleManager initialized")
 
             self._manager.check_and_refresh_token()
+
+            if force:
+                log("info", f"KiaProvider {self.evcc_name}: force refresh (waking vehicle)...")
+                try:
+                    self._manager.force_refresh_all_vehicles_states()
+                except Exception as e:
+                    log("warning", f"KiaProvider {self.evcc_name}: force refresh failed ({e}), falling back to cached")
             self._manager.update_all_vehicles_with_cached_state()
 
             vehicles = list(self._manager.vehicles.values())
@@ -93,10 +109,12 @@ class KiaProvider:
             target = self._manager.vehicles.get(self.vin) if self.vin else None
             if target is None:
                 target = vehicles[0]
+                if self.vin:
+                    log("warning", f"KiaProvider {self.evcc_name}: VIN {self.vin} not found, using first vehicle")
 
             soc = target.ev_battery_percentage
             if soc is None:
-                log("warning", f"KiaProvider {self.evcc_name}: SoC is None (not an EV?)")
+                log("warning", f"KiaProvider {self.evcc_name}: SoC is None (vehicle={getattr(target, 'name', '?')}, id={getattr(target, 'id', '?')})")
                 return None
 
             range_km = getattr(target, "ev_driving_range", None)
@@ -107,7 +125,7 @@ class KiaProvider:
                 provider_type="kia",
             )
             v.update_from_api(float(soc), range_km=float(range_km) if range_km else None)
-            log("info", f"KiaProvider {self.evcc_name}: SoC={soc}% range={range_km}km")
+            log("info", f"KiaProvider {self.evcc_name}: SoC={soc}% range={range_km}km (force={force})")
             self.record_success()
             return v
 
@@ -120,7 +138,7 @@ class KiaProvider:
                 log("warning", f"KiaProvider {self.evcc_name}: rate limited (5091)")
                 return None
             self.record_failure()
-            log("warning", f"KiaProvider {self.evcc_name} poll error: {e}")
+            log("error", f"KiaProvider {self.evcc_name} poll error: {e}\n{traceback.format_exc()}")
             self._manager = None
             return None
 

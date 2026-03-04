@@ -48,7 +48,7 @@ class CustomProvider:
         self.headers = config.get("headers", {})
         log("info", f"CustomProvider: {self.evcc_name} — url={self.url}")
 
-    def poll(self) -> Optional[VehicleData]:
+    def poll(self, force: bool = False) -> Optional[VehicleData]:
         """Fetch SoC from custom URL."""
         if not self.url:
             return None

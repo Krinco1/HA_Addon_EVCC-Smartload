@@ -36,6 +36,7 @@ class VehicleMonitor:
         self._manager = VehicleManager(cfg.vehicle_providers)
         self._lock = threading.Lock()
         self._refresh_requested: set = set()
+        self._refresh_event = threading.Event()
         self._poll_interval_sec = cfg.vehicle_poll_interval_minutes * 60
         self._last_poll: Dict[str, float] = {}
         self._prev_connected: Dict[str, bool] = {}
@@ -92,25 +93,34 @@ class VehicleMonitor:
                 with self._lock:
                     refresh_now = set(self._refresh_requested)
                     self._refresh_requested.clear()
+                    self._refresh_event.clear()
 
                 for name in names:
-                    # evcc-live suppression: skip if vehicle at wallbox
-                    vdata = self._manager.get_vehicle(name)
-                    if vdata and vdata.connected_to_wallbox:
-                        log("debug", f"VehicleMonitor: {name} at wallbox — skipping API poll")
-                        continue
+                    is_manual_refresh = name in refresh_now
 
-                    # Backoff check
-                    provider = self._manager.providers.get(name)
-                    if provider and hasattr(provider, 'is_in_backoff') and provider.is_in_backoff():
-                        log("debug", f"VehicleMonitor: {name} in backoff — skipping")
-                        continue
+                    # evcc-live suppression: skip scheduled polls when at wallbox
+                    # but always allow manual refresh (Poll Now button)
+                    if not is_manual_refresh:
+                        vdata = self._manager.get_vehicle(name)
+                        if vdata and vdata.connected_to_wallbox:
+                            log("debug", f"VehicleMonitor: {name} at wallbox — skipping scheduled poll")
+                            continue
+
+                    # Backoff: skip scheduled polls but allow manual refresh
+                    if not is_manual_refresh:
+                        provider = self._manager.providers.get(name)
+                        if provider and hasattr(provider, 'is_in_backoff') and provider.is_in_backoff():
+                            log("debug", f"VehicleMonitor: {name} in backoff — skipping scheduled poll")
+                            continue
 
                     last = self._last_poll.get(name, 0)
                     interval = self._get_poll_interval(name)
-                    if name in refresh_now or (now - last) >= interval:
-                        log("info", f"VehicleMonitor: polling {name}...")
-                        result = self._manager.poll_vehicle(name)
+                    if is_manual_refresh or (now - last) >= interval:
+                        if is_manual_refresh:
+                            log("info", f"VehicleMonitor: manual refresh for {name}...")
+                        else:
+                            log("info", f"VehicleMonitor: scheduled poll for {name}...")
+                        result = self._manager.poll_vehicle(name, force=is_manual_refresh)
                         self._last_poll[name] = time.time()
 
                         # Always update last_poll on VehicleData (even on failure)
@@ -138,7 +148,8 @@ class VehicleMonitor:
             except Exception as e:
                 log("error", f"VehicleMonitor poll loop error: {e}")
 
-            time.sleep(30)  # Check every 30s whether any poll is due
+            # Wait up to 30s, but wake immediately on manual refresh request
+            self._refresh_event.wait(timeout=30)
 
     def update_from_evcc(self, evcc_state: dict):
         """Pass evcc state to vehicle manager (called by DataCollector)."""
@@ -186,6 +197,7 @@ class VehicleMonitor:
             else:
                 for name in self._manager.get_pollable_names():
                     self._refresh_requested.add(name)
+            self._refresh_event.set()
 
 
 class DataCollector:

@@ -1,5 +1,5 @@
 """
-Renault Vehicle Provider — v6 (Phase 9 fix).
+Renault Vehicle Provider — v6.2 (Poll Now fix).
 
 Uses renault-api library to fetch SoC from Renault/Dacia vehicles.
 Persists aiohttp session and RenaultClient across polls to avoid full re-auth each time.
@@ -17,6 +17,7 @@ config.yaml example:
 
 import asyncio
 import time
+import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -60,25 +61,36 @@ class RenaultProvider:
         self._failure_count = 0
         self._backoff_until = 0.0
 
-    def poll(self) -> Optional[VehicleData]:
-        """Fetch SoC via renault-api using persistent event loop and session."""
+    def poll(self, force: bool = False) -> Optional[VehicleData]:
+        """Fetch SoC via renault-api using persistent event loop and session.
+
+        Args:
+            force: If True, re-initialize client to get fresh data (used by Poll Now).
+        """
         try:
             if self._loop is None or self._loop.is_closed():
                 self._loop = asyncio.new_event_loop()
+            if force:
+                log("info", f"RenaultProvider {self.evcc_name}: force refresh — reinitializing client")
+                self._client = None
+                self._vehicle_obj = None
             return self._loop.run_until_complete(self._async_poll())
         except Exception as e:
             self.record_failure()
-            log("warning", f"RenaultProvider {self.evcc_name} poll error: {e}")
+            log("error", f"RenaultProvider {self.evcc_name} poll error: {e}\n{traceback.format_exc()}")
             return None
 
     async def _async_poll(self) -> Optional[VehicleData]:
         for attempt in range(2):  # max 1 retry after re-auth
             try:
                 if self._client is None:
+                    log("info", f"RenaultProvider {self.evcc_name}: initializing client...")
                     await self._init_client()
+                    log("info", f"RenaultProvider {self.evcc_name}: client initialized")
                 battery = await self._vehicle_obj.get_battery_status()
                 soc = battery.batteryLevel
                 if soc is None:
+                    log("warning", f"RenaultProvider {self.evcc_name}: batteryLevel is None")
                     return None
 
                 v = VehicleData(

@@ -26,7 +26,7 @@ class EvccProvider:
         self.charge_power_kw = float(config.get("charge_power_kw", 11))
         log("info", f"EvccProvider: {self.evcc_name} ({self.capacity_kwh} kWh) — SoC via evcc only")
 
-    def poll(self) -> Optional[VehicleData]:
+    def poll(self, force: bool = False) -> Optional[VehicleData]:
         """EvccProvider has no active poll — returns None."""
         return None
 
