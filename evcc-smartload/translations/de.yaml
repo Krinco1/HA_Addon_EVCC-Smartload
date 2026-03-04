@@ -89,9 +89,6 @@ configuration:
   rl_ready_min_comparisons:
     name: RL Min. Vergleiche
     description: Minimale LP-vs-RL Vergleiche vor RL-Aktivierung
-  rl_bootstrap_max_records:
-    name: RL Bootstrap Max. Datensätze
-    description: Maximale InfluxDB-Datensätze beim RL-Bootstrap zur Speicherbegrenzung
   vehicle_poll_interval_minutes:
     name: Fahrzeug-Abfrageintervall (min)
     description: Intervall für Fahrzeug-API-Abfragen (SoC-Updates)

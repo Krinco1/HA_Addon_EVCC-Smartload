@@ -183,37 +183,3 @@ class InfluxDBClient:
             log("warning", f"InfluxDB query_home_power_hourly error: {e}")
             return []
 
-    def get_history_hours(self, hours: int = 24) -> list:
-        """Return recent state history from InfluxDB (for RL bootstrap).
-        Returns list of dicts with price_ct, battery_soc, pv_power fields."""
-        if not self._enabled:
-            return []
-        try:
-            query = (f"SELECT mean(price_ct), mean(battery_soc), mean(pv_power) "
-                     f"FROM Smartprice "
-                     f"WHERE time > now() - {hours}h "
-                     f"GROUP BY time(1h) fill(none)")
-
-            resp = requests.get(
-                f"{self._base_url}/query",
-                params={"db": self.database, "q": query},
-                auth=self._auth,
-                verify=self._verify,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            results = []
-            for series in data.get("results", [{}])[0].get("series", []):
-                for row in series.get("values", []):
-                    if row[1] is not None:
-                        results.append({
-                            "price_ct": row[1],
-                            "battery_soc": row[2] or 0,
-                            "pv_power": row[3] or 0,
-                        })
-            return results
-        except Exception as e:
-            log("warning", f"InfluxDB get_history_hours error: {e}")
-            return []

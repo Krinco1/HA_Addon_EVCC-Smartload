@@ -272,9 +272,6 @@ class WebServer:
                 # Phase 7: override status
                 elif path == "/override/status":
                     self._json(srv._api_override_status())
-                # Phase 7 Plan 02: departure times for dashboard polling
-                elif path == "/departure-times":
-                    self._json(srv._api_departure_times())
                 # Phase 8: RL learning status for Lernen tab
                 elif path == "/rl-learning":
                     self._json(srv._api_rl_learning())
@@ -818,20 +815,6 @@ class WebServer:
         if self.override_manager is None:
             return {"error": "Override nicht verfügbar", "status": 503}
         return self.override_manager.get_status()
-
-    def _api_departure_times(self) -> dict:
-        """Phase 7 Plan 02: GET /departure-times — departure times per vehicle."""
-        if self.departure_store is None:
-            return {"available": False, "departure_times": {}}
-        # Return ISO strings for each vehicle with a stored future departure
-        snap = self._store.snapshot()
-        state = snap.get("state")
-        vehicles = {}
-        # Include connected vehicle if available
-        if state is not None and state.ev_connected and state.ev_name:
-            dep = self.departure_store.get(state.ev_name)
-            vehicles[state.ev_name] = dep.isoformat() if dep else None
-        return {"available": True, "departure_times": vehicles}
 
     def _api_rl_learning(self) -> dict:
         """Phase 8: Returns RL learning status for the Lernen tab."""

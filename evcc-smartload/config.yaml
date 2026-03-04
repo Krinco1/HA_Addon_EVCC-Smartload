@@ -49,7 +49,6 @@ options:
   rl_ready_threshold: 0.8
   rl_fallback_threshold: 0.7
   rl_ready_min_comparisons: 200
-  rl_bootstrap_max_records: 1000
   vehicle_poll_interval_minutes: 60
   quiet_hours_enabled: true
   quiet_hours_start: 21
@@ -85,7 +84,6 @@ schema:
   rl_ready_threshold: "float(0,1)"
   rl_fallback_threshold: "float(0,1)"
   rl_ready_min_comparisons: "int(1,)"
-  rl_bootstrap_max_records: "int(1,)"
   vehicle_poll_interval_minutes: "int(1,)"
   quiet_hours_enabled: bool?
   quiet_hours_start: "int(0,23)"

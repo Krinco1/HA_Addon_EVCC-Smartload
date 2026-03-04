@@ -89,9 +89,6 @@ configuration:
   rl_ready_min_comparisons:
     name: RL Min Comparisons
     description: Minimum LP vs RL comparisons before RL activation
-  rl_bootstrap_max_records:
-    name: RL Bootstrap Max Records
-    description: Maximum InfluxDB records loaded during RL agent bootstrap to cap memory use
   vehicle_poll_interval_minutes:
     name: Vehicle Poll Interval (min)
     description: Interval for polling vehicle APIs for SoC updates
