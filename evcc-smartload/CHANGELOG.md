@@ -2,6 +2,18 @@
 
 ---
 
+## v6.1.1 — Bugfix: Poll Now Button
+
+### Bugfix
+
+- **Poll Now Button funktioniert jetzt zuverlässig in Produktion**
+  - Manueller Refresh umgeht Provider-Backoff (vorher: Button tat nichts bei Backoff-Status)
+  - Manueller Refresh umgeht Wallbox-Suppression (vorher: kein Poll wenn Fahrzeug an Wallbox)
+  - `force=True` an Provider: KiaProvider sendet Wake-up-Command bei manuellem Poll
+  - Event-basiertes Aufwecken des Poll-Loops (sofortige Verarbeitung statt bis zu 30s Wartezeit)
+
+---
+
 ## v6.1.0 — Vehicle Polling + evcc Lademodus-Steuerung + Batterie-Arbitrage
 
 ### Neue Features
