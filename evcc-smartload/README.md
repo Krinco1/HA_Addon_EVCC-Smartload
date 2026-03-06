@@ -1,6 +1,22 @@
 # EVCC-Smartload v6.1 — Predictiver LP+RL Optimizer
 
-**Intelligentes Energiemanagement für Home Assistant** — optimiert Hausbatterie und EV-Ladung anhand dynamischer Strompreise, 24h LP-Prognose, Solar- und Verbrauchsvorhersagen sowie Fahrer-Präferenzen.
+**Intelligente Erweiterung zu [evcc](https://evcc.io) als Home Assistant Add-on** — optimiert Hausbatterie und EV-Ladung anhand dynamischer Strompreise, 24h LP-Prognose, Solar- und Verbrauchsvorhersagen sowie Fahrer-Präferenzen.
+
+## Verhältnis zu evcc
+
+[evcc](https://github.com/evcc-io/evcc) ist das Open-Source Lade- und Energiemanagement-System, das Wallboxen steuert, PV-Daten liest und Stromtarife bereitstellt. **SmartLoad ersetzt evcc nicht, sondern erweitert es:**
+
+| | evcc (Basis) | SmartLoad (Erweiterung) |
+|---|---|---|
+| **Steuerung** | Wallbox, Batterie, Loadpoints | Setzt evcc-Lademodi via REST API |
+| **Daten** | PV, Tarife, Batterie-SoC, Loadpoints | Liest alles von evcc, ergänzt Vehicle-API-Polling |
+| **Optimierung** | Reaktiv (aktueller PV-Überschuss) | Prädiktiv (24h LP-Planung mit Prognosen) |
+| **Planung** | Kein Vorausblick | 96-Slot Rolling-Horizon LP (scipy/HiGHS) |
+| **Prognose** | — | Verbrauchs-EMA + PV-Forecast + Preis-Perzentile |
+| **Multi-EV** | 1 Loadpoint = 1 Fahrzeug | Charge-Sequencer koordiniert mehrere EVs |
+| **UI** | evcc Web-UI (:7070) | Eigenes Dashboard (:8099) mit Gantt, Fahrzeuge, Lernen |
+
+**Voraussetzung:** evcc muss installiert und konfiguriert sein (Wallbox, PV-Anlage, Stromtarif, Batterie).
 
 ## Features
 
@@ -27,20 +43,22 @@
 
 ## Installation
 
-1. Repository als Custom Add-on in Home Assistant hinzufügen:
+1. **evcc einrichten** — [evcc.io/docs](https://docs.evcc.io) (Wallbox, PV, Batterie, Stromtarif konfigurieren)
+
+2. Repository als Custom Add-on in Home Assistant hinzufügen:
    `Einstellungen → Add-ons → Add-on Store → ⋮ → Custom repositories`
    URL: `https://github.com/Krinco1/HA_Addon_EVCC-Smartload`
 
-2. Add-on installieren und starten
+3. Add-on installieren und `evcc_url` konfigurieren (z.B. `http://evcc.local:7070`)
 
-3. Dashboard öffnen: `http://homeassistant:8099`
+4. Starten — Dashboard öffnen: `http://homeassistant:8099`
 
 ## Konfiguration
 
 ### config.yaml (Add-on Optionen)
 
 ```yaml
-evcc_url: "http://evcc.local:7070"
+evcc_url: "http://evcc.local:7070"     # evcc REST API Adresse (Pflicht)
 battery_capacity_kwh: 33.1
 battery_charge_power_kw: 5.0             # Max Ladeleistung Batterie in kW
 battery_min_soc: 10                      # Min SoC in % (LP-Untergrenze)
@@ -104,7 +122,7 @@ drivers:
 | Methode | Endpoint | Beschreibung |
 |---|---|---|
 | GET | `/` | Dashboard (HTML) |
-| GET | `/health` | Heartbeat — `{"status":"ok","version":"6.1.0"}` |
+| GET | `/health` | Heartbeat — `{"status":"ok","version":"6.1.1"}` |
 | GET | `/status` | Vollständiger System-Status inkl. Percentile, RL-Reife |
 | GET | `/summary` | Kompakte Übersicht für externe Integrationen |
 | GET | `/config` | Aktive Konfiguration (read-only) |
@@ -137,58 +155,52 @@ drivers:
 ## Architektur
 
 ```
-Strompreise (24h)  ──┐
-Verbrauchsprognose ──┤
-PV-Prognose       ──┼──→ HorizonPlanner (LP/HiGHS)
-Batterie-SoC      ──┤         ↓
-EV-SoC + Deadline ──┘    PlanHorizon (96 Slots)
-                              ↓
-                    ┌─── Slot 0 Entscheidung ───┐
-                    ↓                           ↓
-              Batterie-Aktion            EV-Aktion
-              (charge/discharge/hold)    (charge/off)
-                    ↓                           ↓
-              EvccModeController ──→ evcc API ──→ Wallbox/Batterie
-              (pv/minpv/now)              ↑
-                    ↓                     │
-              BatteryArbitrage ────────────┘
-              (7-Gate Batterie→EV)
-                    ↓
-              StateStore ──→ SSE /events ──→ Dashboard (4 Tabs)
+evcc (Basis-System)
+  │
+  │  REST API (:7070)
+  │  ├── /api/state          → Batterie, PV, Grid, Loadpoints
+  │  ├── /api/tariff/grid    → Dynamische Strompreise (24h)
+  │  ├── /api/tariff/solar   → PV-Ertragsprognose
+  │  └── /api/loadpoints/…   → Lademodus setzen (pv/minpv/now)
+  │
+  ▼
+SmartLoad (Erweiterung)
+  │
+  ├── DataCollector          → Liest evcc-State alle 30s
+  ├── ConsumptionForecaster  → Verbrauchsprognose aus InfluxDB
+  ├── PVForecaster           → PV-Prognose via evcc Solar Tariff
+  │
+  ├── HorizonPlanner (LP)    → 96-Slot Rolling-Horizon Optimierung
+  │     ↓
+  ├── EvccModeController     → Setzt evcc-Lademodus (pv/minpv/now)
+  ├── BatteryArbitrage       → 7-Gate Batterie→EV Entladung
+  ├── ChargeSequencer        → Multi-EV Koordination
+  │
+  ├── StateStore             → Thread-safe State + SSE-Broadcast
+  └── Dashboard (:8099)      → 4 Tabs mit Live-Updates
 ```
 
-Der **HorizonPlanner** löst jeden 15-Min-Zyklus ein 96-Slot LP (MPC-Ansatz): Nur die Slot-0-Entscheidung wird angewendet; im nächsten Zyklus wird das LP mit dem tatsächlichen SoC neu gelöst. Der HolisticOptimizer ist automatischer Fallback bei LP-Fehler.
+Der **HorizonPlanner** löst jeden 15-Min-Zyklus ein 96-Slot LP (MPC-Ansatz): Nur die Slot-0-Entscheidung wird angewendet; im nächsten Zyklus wird das LP mit dem tatsächlichen SoC neu gelöst.
 
-Der **EvccModeController** setzt den evcc-Lademodus basierend auf dem LP-Plan und Preis-Perzentilen. Manuelle evcc-Overrides werden erkannt und respektiert bis der Ladevorgang endet.
+Der **EvccModeController** setzt den evcc-Lademodus über die evcc REST API basierend auf dem LP-Plan und Preis-Perzentilen. Manuelle evcc-Overrides werden erkannt und respektiert bis der Ladevorgang endet.
 
 Die **BatteryArbitrage** prüft über 7 Gates ob Batterie→EV-Entladung wirtschaftlich sinnvoll ist (inkl. LP-Autorisierung, Profitabilität, 6h-Lookahead-Guard).
 
-Der **StateStore** ist der RLock-geschützte Single Source of Truth. Der Web-Server greift ausschließlich über `snapshot()` lesend zu — keine Race Conditions möglich.
-
-Der ConsumptionForecaster verwendet EMA aus InfluxDB-Historie (Tiered: 7d@15min, 8–30d@hourly). Der PVForecaster liest stündlich die evcc Solar Tariff API mit Rolling Correction Coefficient.
-
 ## Wichtige Hinweise
 
+- **evcc ist Pflicht** — SmartLoad funktioniert nicht ohne eine laufende evcc-Instanz
+- **evcc bleibt Steuerungsschicht** — SmartLoad sendet Befehle über die evcc API, steuert nie direkt Hardware
+- **Manuelle evcc-Overrides** werden respektiert — SmartLoad kämpft nicht gegen den Nutzer
 - **HorizonPlanner ist primärer Optimizer (LP)**; HolisticOptimizer nur automatischer Fallback bei LP-Fehler
-- **EvccModeController** setzt aktiv den Lademodus — manuelle Overrides in evcc werden respektiert
-- **Battery Arbitrage** entlädt Hausbatterie ins EV nur wenn LP es autorisiert und 7 Gates bestanden sind
-- **StateStore garantiert Thread-Safety** — kein Race Condition möglich (RLock, read-only Web-Server via snapshot())
 - **Forecaster brauchen 24h Daten** bevor sie bereit sind (is_ready Gate) — davor läuft LP ohne Prognose
 - **Vehicle Providers**: Kia/Renault-API mit automatischem Backoff, evcc-Live-SoC hat Vorrang bei Wallbox-Verbindung
-- **Quiet Hours**: Zwischen 21:00–06:00 kein automatisches EV-Umstecken. Wer hängt, lädt
+- **Quiet Hours**: Zwischen 21:00–06:00 kein automatisches EV-Umstecken
 - **Telegram**: Direkte Bot API, kein HA Automation/Webhook nötig
 - **drivers.yaml optional**: Ohne Datei volles Bestandsverhalten
 
-## Fahrzeug-Datenstand
+## Links
 
-| Fahrzeug | Provider | SoC-Verfügbarkeit |
-|---|---|---|
-| KIA EV9 (99.8 kWh) | kia (ccapi) | Jederzeit |
-| Renault Twingo (22 kWh) | renault-api | Jederzeit |
-| ORA 03 (63 kWh) | evcc | Nur wenn verbunden |
-
-## Support & Updates
-
-Dashboard: `http://homeassistant:8099`
-Docs: `http://homeassistant:8099/docs`
-GitHub: https://github.com/Krinco1/HA_Addon_EVCC-Smartload
+- **evcc Projekt:** [evcc.io](https://evcc.io) / [GitHub](https://github.com/evcc-io/evcc) / [Docs](https://docs.evcc.io)
+- **SmartLoad Dashboard:** `http://homeassistant:8099`
+- **SmartLoad Docs:** `http://homeassistant:8099/docs`
+- **GitHub:** [Krinco1/HA_Addon_EVCC-Smartload](https://github.com/Krinco1/HA_Addon_EVCC-Smartload)

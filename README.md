@@ -1,8 +1,24 @@
 # EVCC-Smartload Add-on Repository
 
-Home Assistant Add-on Repository für **EVCC-Smartload** — intelligentes Energiemanagement mit predictivem 24h LP-Planner, PV/Verbrauchs-Prognose und hybridem LP+RL Optimizer.
+Home Assistant Add-on Repository für **EVCC-Smartload** — eine intelligente Erweiterung zu [evcc](https://evcc.io) für prädiktives Energiemanagement mit 24h LP-Planner, PV/Verbrauchs-Prognose und hybridem LP+RL Optimizer.
+
+## Was ist evcc?
+
+[evcc](https://github.com/evcc-io/evcc) ist ein Open-Source Lade- und Energiemanagement-System für Elektrofahrzeuge und Hausbatterien. Es steuert Wallboxen, liest PV-Daten und Stromtarife, und bietet eine Web-UI zur Überwachung.
+
+**SmartLoad baut auf evcc auf** und erweitert es um:
+- Prädiktive 24h-Optimierung (statt reaktiver Steuerung)
+- LP-basierte kostenoptimale Lade-/Entladeplanung
+- Verbrauchs- und PV-Prognosen aus historischen Daten
+- Intelligente Multi-EV-Koordination an einer Wallbox
+- Automatische evcc-Lademodus-Steuerung basierend auf Preis-Perzentilen
+- Batterie→EV Arbitrage mit 7-Gate Sicherheitslogik
+
+evcc bleibt die zentrale Datenquelle (Strompreise, PV, Batterie-Status, Wallbox) und Steuerungsschnittstelle — SmartLoad liest Daten über die evcc REST API und setzt Lademodi über dieselbe API.
 
 ## Installation
+
+**Voraussetzung:** [evcc](https://evcc.io) muss installiert und konfiguriert sein (Wallbox, PV, Batterie, Stromtarif).
 
 1. Dieses Repository als Custom Add-on Repository in Home Assistant hinzufügen:
 
@@ -17,13 +33,15 @@ Home Assistant Add-on Repository für **EVCC-Smartload** — intelligentes Energ
 
 3. **EVCC-Smartload - Predictive LP Optimizer** installieren
 
-4. Konfiguration anpassen und starten
+4. `evcc_url` in der Add-on-Konfiguration auf die evcc-Instanz setzen (z.B. `http://evcc.local:7070`)
+
+5. Starten — SmartLoad verbindet sich mit evcc und beginnt die Optimierung
 
 ## Enthaltene Add-ons
 
 | Add-on | Beschreibung | Version |
 |---|---|---|
-| [EVCC-Smartload](evcc-smartload/) | Predictiver LP+RL Optimizer für Batterie & EV-Ladung mit 24h Horizont | 6.1.0 |
+| [EVCC-Smartload](evcc-smartload/) | Predictiver LP+RL Optimizer für Batterie & EV-Ladung mit 24h Horizont | 6.1.1 |
 
 ## Features
 
@@ -44,7 +62,24 @@ Home Assistant Add-on Repository für **EVCC-Smartload** — intelligentes Energ
 - **Vehicle Providers** — KIA, Renault, evcc, Custom
 - **Dashboard** — 4 Tabs (Status, Plan/Gantt, Fahrzeuge, Lernen) mit SVG-Charts und Live-SSE-Updates
 
-## Support
+## Zusammenspiel mit evcc
 
-- Dashboard: `http://homeassistant.local:8099`
-- GitHub: https://github.com/Krinco1/HA_Addon_EVCC-Smartload
+```
+evcc (Basis)                          SmartLoad (Erweiterung)
+┌─────────────────────┐              ┌──────────────────────────┐
+│ Wallbox-Steuerung   │◄── API ────►│ HorizonPlanner (24h LP)  │
+│ PV-Daten            │   lesen/    │ Verbrauchs-/PV-Prognose  │
+│ Stromtarife         │   setzen    │ EvccModeController       │
+│ Batterie-Status     │              │ BatteryArbitrage         │
+│ Loadpoint-Modes     │              │ Charge-Sequencer         │
+│ Web-UI              │              │ Dashboard (:8099)        │
+└─────────────────────┘              └──────────────────────────┘
+```
+
+SmartLoad greift ausschließlich über die evcc REST API zu — keine Modifikation an evcc nötig.
+
+## Links
+
+- **SmartLoad Dashboard:** `http://homeassistant.local:8099`
+- **evcc Projekt:** [evcc.io](https://evcc.io) / [GitHub](https://github.com/evcc-io/evcc)
+- **SmartLoad GitHub:** [Krinco1/HA_Addon_EVCC-Smartload](https://github.com/Krinco1/HA_Addon_EVCC-Smartload)
