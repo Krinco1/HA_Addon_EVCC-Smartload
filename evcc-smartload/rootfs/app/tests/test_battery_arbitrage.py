@@ -373,5 +373,84 @@ class TestEdgeCases(unittest.TestCase):
         self.assertIn("profitabel", result.get("reason", ""))
 
 
+# ---------------------------------------------------------------------------
+# SC-6: Transition-only deactivation (no redundant apply_battery_to_ev calls)
+# ---------------------------------------------------------------------------
+
+class TestTransitionOnlyDeactivation(unittest.TestCase):
+
+    def test_gate_fail_already_inactive_no_call(self):
+        """When gates fail and _bat_to_ev_active=False, apply_battery_to_ev NOT called."""
+        cfg = make_cfg()
+        state = make_state()
+        ctrl = make_controller()
+        ctrl._bat_to_ev_active = False
+
+        # No EV connected -> gate fails
+        result = _run_bat_to_ev(cfg, state, ctrl, {}, make_tariffs(), [], False)
+        self.assertFalse(result.get("active", False))
+        ctrl.apply_battery_to_ev.assert_not_called()
+
+    def test_gate_fail_active_calls_deactivate(self):
+        """When gates fail and _bat_to_ev_active=True, apply_battery_to_ev IS called."""
+        cfg = make_cfg()
+        state = make_state()
+        ctrl = make_controller()
+        ctrl._bat_to_ev_active = True
+
+        # No EV connected -> gate fails, but should deactivate
+        result = _run_bat_to_ev(cfg, state, ctrl, {}, make_tariffs(), [], False)
+        ctrl.apply_battery_to_ev.assert_called_once()
+        call_args = ctrl.apply_battery_to_ev.call_args[0][0]
+        self.assertFalse(call_args["is_profitable"])
+
+    def test_ev_need_too_low_inactive_no_call(self):
+        """EV need < 1 kWh and already inactive -> no deactivation call."""
+        cfg = make_cfg()
+        state = make_state()
+        ctrl = make_controller()
+        ctrl._bat_to_ev_active = False
+        vehicles = {"TestEV": make_vehicle(soc=79, connected=True, capacity=60)}
+
+        result = _run_bat_to_ev(cfg, state, ctrl, vehicles, make_tariffs(), [], True)
+        self.assertFalse(result.get("active", False))
+        ctrl.apply_battery_to_ev.assert_not_called()
+
+    def test_lp_not_authorizing_inactive_no_call(self):
+        """LP not authorizing and already inactive -> no deactivation call."""
+        cfg = make_cfg()
+        state = make_state(battery_soc=60, current_price=0.40)
+        ctrl = make_controller()
+        ctrl._bat_to_ev_active = False
+        vehicles = {"TestEV": make_vehicle(soc=50, connected=True)}
+        plan = make_plan(current_bat_discharge=False)
+        mode_status = {"current_mode": "now"}
+
+        result = _run_bat_to_ev(
+            cfg, state, ctrl, vehicles, make_tariffs(), [], True,
+            plan=plan, mode_status=mode_status,
+        )
+        self.assertFalse(result.get("active", False))
+        ctrl.apply_battery_to_ev.assert_not_called()
+
+    def test_not_profitable_active_calls_deactivate(self):
+        """Not profitable but currently active -> must deactivate."""
+        cfg = make_cfg()
+        state = make_state(battery_soc=60, current_price=0.25)
+        ctrl = make_controller()
+        ctrl._bat_to_ev_active = True
+        vehicles = {"TestEV": make_vehicle(soc=50, connected=True)}
+        plan = make_plan(current_bat_discharge=True)
+        mode_status = {"current_mode": "now"}
+
+        result = _run_bat_to_ev(
+            cfg, state, ctrl, vehicles, make_tariffs(25.0), [], True,
+            plan=plan, mode_status=mode_status, buffer_calc=make_buffer_calc(),
+        )
+        ctrl.apply_battery_to_ev.assert_called_once()
+        call_args = ctrl.apply_battery_to_ev.call_args[0][0]
+        self.assertFalse(call_args["is_profitable"])
+
+
 if __name__ == "__main__":
     unittest.main()

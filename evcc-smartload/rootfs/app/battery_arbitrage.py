@@ -26,8 +26,13 @@ def run_battery_arbitrage(cfg, state, controller, all_vehicles, tariffs,
     """
     _inactive = {"active": False, "reason": None}
 
+    def _deactivate_if_active():
+        """Only send deactivation command on active->inactive transition."""
+        if controller._bat_to_ev_active:
+            controller.apply_battery_to_ev({"is_profitable": False}, False)
+
     if not any_ev_connected or not tariffs:
-        controller.apply_battery_to_ev({"is_profitable": False}, False)
+        _deactivate_if_active()
         return _inactive
 
     total_ev_need = sum(
@@ -36,19 +41,19 @@ def run_battery_arbitrage(cfg, state, controller, all_vehicles, tariffs,
         if v.get_effective_soc() > 0 or v.connected_to_wallbox or v.data_source == "direct_api"
     )
     if total_ev_need < 1:
-        controller.apply_battery_to_ev({"is_profitable": False}, False)
+        _deactivate_if_active()
         return _inactive
 
     # --- Gate 3: EV must be in 'now' mode (fast charging) ---
     current_ev_mode = (mode_status or {}).get("current_mode")
     if current_ev_mode != "now":
-        controller.apply_battery_to_ev({"is_profitable": False}, False)
+        _deactivate_if_active()
         return {**_inactive, "reason": f"EV nicht im Sofortladen-Modus ({current_ev_mode})"}
 
     # --- Gate 2: LP must authorize battery discharge ---
     lp_authorizes = plan is not None and plan.current_bat_discharge
     if not lp_authorizes:
-        controller.apply_battery_to_ev({"is_profitable": False}, False)
+        _deactivate_if_active()
         reason = "LP plant keine Batterie-Entladung" if plan else "kein LP-Plan verfügbar"
         return {**_inactive, "reason": reason}
 
@@ -56,7 +61,7 @@ def run_battery_arbitrage(cfg, state, controller, all_vehicles, tariffs,
     if plan and plan.slots:
         slot0 = plan.slots[0]
         if slot0.bat_discharge_kw > 0.1 and slot0.ev_charge_kw < 0.1:
-            controller.apply_battery_to_ev({"is_profitable": False}, False)
+            _deactivate_if_active()
             log("info", "Phase 12: LP-Entladung aktiv (Grid), Battery-to-EV blockiert (Mutual Exclusion)")
             return {**_inactive, "reason": "LP entlaedt zur Netzeinspeisung (Mutual Exclusion)"}
 
@@ -69,7 +74,7 @@ def run_battery_arbitrage(cfg, state, controller, all_vehicles, tariffs,
 
     bat_available = max(0, (state.battery_soc - effective_floor) / 100 * cfg.battery_capacity_kwh)
     if bat_available < 0.5:
-        controller.apply_battery_to_ev({"is_profitable": False}, False)
+        _deactivate_if_active()
         return {**_inactive, "reason": f"Batterie-SoC ({state.battery_soc:.0f}%) zu nah an Untergrenze ({effective_floor}%)"}
 
     # --- Gate 4: Profitability (85% roundtrip efficiency) ---
@@ -79,7 +84,7 @@ def run_battery_arbitrage(cfg, state, controller, all_vehicles, tariffs,
     savings = grid_ct - bat_cost_ct
 
     if savings < cfg.battery_to_ev_min_profit_ct:
-        controller.apply_battery_to_ev({"is_profitable": False}, False)
+        _deactivate_if_active()
         return {**_inactive, "reason": f"Nicht profitabel ({savings:.1f} ct/kWh < {cfg.battery_to_ev_min_profit_ct} ct Minimum)"}
 
     # --- Gate 5: 6h lookahead — block if cheaper grid window coming ---
@@ -89,7 +94,7 @@ def run_battery_arbitrage(cfg, state, controller, all_vehicles, tariffs,
         for slot in lookahead_slots:
             future_price_ct = slot.price_eur_kwh * 100
             if future_price_ct < current_grid_ct * 0.8:
-                controller.apply_battery_to_ev({"is_profitable": False}, False)
+                _deactivate_if_active()
                 cheaper_time = slot.slot_start.strftime("%H:%M") if slot.slot_start else "?"
                 log("info", f"Phase 12: Lookahead-Guard blockiert Entladung -- "
                             f"guenstigere Preise um {cheaper_time} ({future_price_ct:.1f} ct vs {current_grid_ct:.1f} ct)")
