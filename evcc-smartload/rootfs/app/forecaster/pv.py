@@ -339,7 +339,7 @@ class PVForecaster:
                     total_hours += duration_hours
             except Exception:
                 continue
-        return int(total_hours)
+        return min(int(total_hours), 24)
 
     @staticmethod
     def _parse_iso(s: str) -> Optional[datetime]:

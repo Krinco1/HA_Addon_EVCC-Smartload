@@ -26,7 +26,7 @@ from config import load_config
 from config_validator import ConfigValidator
 from evcc_client import EvccClient
 from influxdb_client import InfluxDBClient
-from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh, compute_price_percentiles
+from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh, compute_price_percentiles, filter_today_solar
 from state_store import StateStore
 from forecaster import ConsumptionForecaster, PVForecaster
 from forecaster.ha_energy import run_entity_discovery
@@ -331,9 +331,10 @@ def main():
                     1 for t in tariffs
                     if float(t.get("value", 1)) <= state.price_percentiles.get(30, 0.20)
                 )
+                solar_today = filter_today_solar(solar_forecast)
                 state.solar_forecast_total_kwh = sum(
-                    max(0, float(t.get("value", 0))) for t in solar_forecast
-                ) * (0.001 if solar_forecast and float(solar_forecast[0].get("value", 0)) > 100 else 1.0)
+                    max(0, float(t.get("value", 0))) for t in solar_today
+                ) * (0.001 if solar_today and float(solar_today[0].get("value", 0)) > 100 else 1.0)
 
             # Dynamic RL device registration
             for vname in vehicle_monitor.get_all_vehicles():

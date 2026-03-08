@@ -33,7 +33,7 @@ from urllib.parse import urlparse, parse_qs
 from config import Config
 from explanation_generator import ExplanationGenerator
 from logging_util import log
-from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh
+from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh, filter_today_solar
 from state_store import StateStore
 from version import VERSION
 
@@ -907,6 +907,7 @@ class WebServer:
 
         solar_by_hour = {}
         if solar_forecast:
+            solar_forecast = filter_today_solar(solar_forecast)
             raw_vals = [float(t.get("value", 0)) for t in solar_forecast
                         if float(t.get("value", 0)) > 0]
             unit_factor = 0.001 if raw_vals and sorted(raw_vals)[len(raw_vals) // 2] > 100 else 1.0
