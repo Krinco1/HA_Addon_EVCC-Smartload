@@ -25,41 +25,51 @@ class Controller:
         self._bat_to_ev_active = False
         self._last_buffer_soc: Optional[int] = None
         self._last_priority_soc: Optional[int] = None
+        # Command deduplication: skip redundant evcc API calls
+        self._last_bat_action: Optional[int] = None
+        self._last_bat_limit: Optional[float] = None
+        self._last_ev_action: Optional[int] = None
+        self._last_ev_limit: Optional[float] = None
 
     def apply(self, action: Action) -> float:
         """Apply action and return estimated cost (placeholder)."""
 
-        # ---- Battery ----
+        # ---- Battery (with dedup) ----
         bat = action.battery_action
+        bat_limit = action.battery_limit_eur
+        bat_changed = (bat != self._last_bat_action or bat_limit != self._last_bat_limit)
 
-        if bat in (1, 2, 3, 4):
-            # Charge actions: set grid charge limit
-            if action.battery_limit_eur is not None and action.battery_limit_eur > 0:
-                self.evcc.set_battery_grid_charge_limit(action.battery_limit_eur)
+        if bat_changed:
+            if bat in (1, 2, 3, 4):
+                if bat_limit is not None and bat_limit > 0:
+                    self.evcc.set_battery_grid_charge_limit(bat_limit)
+                else:
+                    self.evcc.clear_battery_grid_charge_limit()
+            elif bat == 5:
+                self.evcc.set_battery_grid_charge_limit(0.0)
+            elif bat == 6:
+                self.evcc.clear_battery_grid_charge_limit()
             else:
                 self.evcc.clear_battery_grid_charge_limit()
-
-        elif bat == 5:
-            # PV-only: limit = 0 means evcc will only charge from surplus
-            self.evcc.set_battery_grid_charge_limit(0.0)
-
-        elif bat == 6:
-            # Discharge: clear grid charge limit (battery can discharge freely)
-            self.evcc.clear_battery_grid_charge_limit()
-
+            self._last_bat_action = bat
+            self._last_bat_limit = bat_limit
         else:
-            # Hold (0): clear any active charge limit
-            self.evcc.clear_battery_grid_charge_limit()
+            log("debug", "Controller: skip redundant battery command")
 
-        # ---- EV ----
+        # ---- EV (with dedup) ----
         ev = action.ev_action
+        ev_limit = action.ev_limit_eur
+        ev_changed = (ev != self._last_ev_action or ev_limit != self._last_ev_limit)
 
-        if ev in (1, 2, 3) and action.ev_limit_eur is not None:
-            self.evcc.set_smart_cost_limit(max(0, action.ev_limit_eur))
-        elif ev == 4:
-            # PV-only for EV
-            self.evcc.set_smart_cost_limit(0.0)
-        # ev == 0: no action needed (evcc honours existing limits)
+        if ev_changed:
+            if ev in (1, 2, 3) and ev_limit is not None:
+                self.evcc.set_smart_cost_limit(max(0, ev_limit))
+            elif ev == 4:
+                self.evcc.set_smart_cost_limit(0.0)
+            self._last_ev_action = ev
+            self._last_ev_limit = ev_limit
+        else:
+            log("debug", "Controller: skip redundant EV command")
 
         self.last_action = action
         return 0.0
