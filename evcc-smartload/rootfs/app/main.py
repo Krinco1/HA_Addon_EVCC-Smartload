@@ -553,7 +553,7 @@ def main():
                 # Determine departure urgency for mode selection
                 _departure_urgent = False
                 if state.ev_connected and departure_store:
-                    _dep_time = departure_store.get_departure(state.ev_name or "")
+                    _dep_time = departure_store.get(state.ev_name or "")
                     if _dep_time:
                         _hours_left = (_dep_time - datetime.now(timezone.utc)).total_seconds() / 3600
                         _soc_needed = max(0, cfg.ev_target_soc - state.ev_soc)
