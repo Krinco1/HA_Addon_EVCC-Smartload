@@ -2,6 +2,45 @@
 
 ---
 
+## v6.2.0 — Bugfixes: PV Forecast, evcc Coexistence, Vehicle Polling, Charge Sequencer
+
+### Bugfixes
+
+**PV Forecast 2x Deviation (Phase 13)**
+- `filter_today_solar()` filtert evcc 48h Solar-Daten auf heute — behebt systematische 2x Abweichung
+- Coverage Hours auf 24 gekappt in `PVForecaster._count_future_hours`
+- Date-Filter auf Europe/Berlin Timezone, angewendet bei allen Summationspunkten
+
+**evcc Coexistence (Phase 13)**
+- Command Deduplication in `Controller.apply()` — keine redundanten evcc API-Calls bei unverändertem State
+- Transition-only Deactivation in Battery Arbitrage — `_deactivate_if_active()` statt immer deaktivieren
+- "Defers to evcc" Eintrag im Decision Log wenn SmartLoad während PV-Surplus idle ist
+
+**Vehicle Data Reliability (Phase 14)**
+- `poll_vehicle()` merged via `update_from_api()` statt VehicleData-Objekt zu ersetzen
+- Unified `is_data_stale()` mit Wallbox-Awareness (evcc/live data_source Check)
+- Ad-hoc Wallbox Stale Check aus server.py entfernt, unified in `is_data_stale()`
+- ManualSoC `clear()` Methode + timestamp-aware auto-clear (`poll_time > manual_ts`)
+
+**Charge Sequencer Transition (Phase 15)**
+- Current-Hour-First Slot Assignment für Top-Priority Vehicle — sofortige Transition statt Delay
+- Transition Logging mit beiden Fahrzeugnamen bei Queue-Handoff
+- Tariff Gap Handling mit Median-Price Synthese
+
+**Departure Store Bugfix (Phase 16)**
+- `departure_store.get_departure()` → `.get()` — behebt AttributeError in main.py
+- Departure Urgency erreicht jetzt korrekt den Mode Controller
+
+### Tests
+
+- 101 Unit Tests bestehen (0.55s), keine Regressionen
+- 14 neue Tests für Phase 13 (Dedup + Transition)
+- 6 neue Tests für Phase 14 (Polling + ManualSoC)
+- 4 neue Tests für Phase 15 (Sequencer)
+- 5 neue Tests für Phase 16 (Departure + Decision Log)
+
+---
+
 ## v6.1.1 — Bugfix: Poll Now Button
 
 ### Bugfix
