@@ -51,6 +51,8 @@ class VehicleData:
         """Return True if SoC data is older than STALE_THRESHOLD_MINUTES."""
         if self.manual_soc is not None:
             return False   # Manual overrides are never stale
+        if self.connected_to_wallbox and self.data_source in ("evcc", "live"):
+            return False   # Live wallbox data is never stale
         if self.last_update is None:
             return True
         age = datetime.now(timezone.utc) - self.last_update.astimezone(timezone.utc)
