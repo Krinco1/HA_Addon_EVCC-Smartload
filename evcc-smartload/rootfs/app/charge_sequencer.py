@@ -263,10 +263,9 @@ class ChargeSequencer:
     ) -> List[ChargeSlot]:
         schedule: List[ChargeSlot] = []
         used_hours: set = set()
+        current_hour = now.replace(minute=0, second=0, microsecond=0)
 
-        for req in ranked:
-            # During quiet hours: skip vehicles that aren't connected
-            # (they have to wait until quiet period ends)
+        for i, req in enumerate(ranked):
             available = [
                 (h, p) for h, p in hourly_prices
                 if h not in used_hours
@@ -275,8 +274,23 @@ class ChargeSequencer:
                 break
 
             needed = max(1, int(req.hours_needed) + 1)
-            by_price = sorted(available, key=lambda x: x[1])
-            chosen = by_price[:needed]
+
+            if i == 0:
+                # Top-priority vehicle: force current hour for immediate activation
+                current_slot = [(h, p) for h, p in available if h == current_hour]
+                if not current_slot:
+                    # Tariff gap: synthesize current hour with median price
+                    prices_only = sorted(p for _, p in available)
+                    median_price = prices_only[len(prices_only) // 2]
+                    current_slot = [(current_hour, median_price)]
+                other_slots = sorted(
+                    [(h, p) for h, p in available if h != current_hour],
+                    key=lambda x: x[1]
+                )
+                chosen = current_slot + other_slots[:max(0, needed - len(current_slot))]
+            else:
+                by_price = sorted(available, key=lambda x: x[1])
+                chosen = by_price[:needed]
 
             if chosen:
                 slots = self._build_slots(req.vehicle_name, chosen, req.need_kwh)
@@ -322,12 +336,15 @@ class ChargeSequencer:
             mode = "pv" if active.source == "solar" else "minpv"
             self.evcc.set_loadpoint_mode(1, mode)
             if self._last_applied_vehicle != active.vehicle_name:
-                log("info", f"Sequencer: activating {active.vehicle_name} ({mode})")
+                if self._last_applied_vehicle is not None:
+                    log("info", f"Sequencer: transition {self._last_applied_vehicle}(done) -> {active.vehicle_name}(charging) at {now.isoformat()}")
+                else:
+                    log("info", f"Sequencer: activating {active.vehicle_name} ({mode})")
                 self._last_applied_vehicle = active.vehicle_name
         else:
             # No active slot; if we were controlling, reset
             if self._last_applied_vehicle is not None:
-                log("info", "Sequencer: no active slot → loadpoint off")
+                log("info", "Sequencer: no active slot -> loadpoint off")
                 self.evcc.set_loadpoint_mode(1, "off")
                 self._last_applied_vehicle = None
 
