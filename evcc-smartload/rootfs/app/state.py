@@ -282,6 +282,13 @@ class ManualSocStore:
             except (ValueError, TypeError):
                 return None
 
+    def clear(self, vehicle_name: str):
+        with self._lock:
+            if vehicle_name in self._data:
+                del self._data[vehicle_name]
+                self._save()
+                log("info", f"Manual SoC for {vehicle_name} cleared (newer API data)")
+
     def get_all(self) -> Dict:
         with self._lock:
             return self._data.copy()

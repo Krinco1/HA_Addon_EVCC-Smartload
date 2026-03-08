@@ -68,6 +68,7 @@ class VehicleMonitor:
                         vdata = self._manager.get_vehicle(name)
                         if vdata:
                             vdata.last_successful_poll = datetime.now(timezone.utc)
+                        self._maybe_clear_manual_soc(name, datetime.now(timezone.utc))
                         manual = self.manual_store.get(name)
                         if manual is not None:
                             result.manual_soc = manual
@@ -132,7 +133,9 @@ class VehicleMonitor:
                             # Set last_successful_poll ONLY on success
                             if vdata:
                                 vdata.last_successful_poll = datetime.now(timezone.utc)
-                            # Apply manual SoC override if present
+                            # Auto-clear manual SoC if API data is newer
+                            self._maybe_clear_manual_soc(name, datetime.now(timezone.utc))
+                            # Apply manual SoC override if still present
                             manual = self.manual_store.get(name)
                             if manual is not None:
                                 result.manual_soc = manual
@@ -150,6 +153,11 @@ class VehicleMonitor:
 
             # Wait up to 30s, but wake immediately on manual refresh request
             self._refresh_event.wait(timeout=30)
+
+    def _maybe_clear_manual_soc(self, name: str, poll_time: datetime):
+        manual_ts = self.manual_store.get_timestamp(name)
+        if manual_ts and poll_time > manual_ts:
+            self.manual_store.clear(name)
 
     def update_from_evcc(self, evcc_state: dict):
         """Pass evcc state to vehicle manager (called by DataCollector)."""
