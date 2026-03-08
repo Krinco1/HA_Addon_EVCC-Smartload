@@ -13,6 +13,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -317,9 +318,45 @@ def compute_price_percentiles(tariffs: List[Dict]) -> Dict[int, float]:
 # Solar surplus helpers
 # =============================================================================
 
+def filter_today_solar(solar_forecast: list, now: datetime = None) -> list:
+    """Filter solar forecast entries to only include today's date (local timezone).
+
+    evcc /api/tariff/solar returns ~48h of data. For dashboard totals and
+    surplus calculations we only want today's entries to avoid 2x inflation.
+    """
+    if not solar_forecast:
+        return []
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    berlin = ZoneInfo("Europe/Berlin")
+    today_local = now.astimezone(berlin).date()
+
+    result = []
+    for entry in solar_forecast:
+        s = entry.get("start", "")
+        if not s:
+            continue
+        try:
+            if s.endswith("Z"):
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            elif "+" in s:
+                dt = datetime.fromisoformat(s)
+            else:
+                dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+            entry_date = dt.astimezone(berlin).date()
+            if entry_date == today_local:
+                result.append(entry)
+        except Exception:
+            continue
+    return result
+
+
 def calc_solar_surplus_kwh(solar_forecast: List[Dict],
                            home_consumption_kw: float = 1.0) -> float:
     """Calculate expected solar surplus energy in kWh from evcc forecast entries."""
+    solar_forecast = filter_today_solar(solar_forecast)
     if not solar_forecast or len(solar_forecast) < 2:
         return 0.0
 

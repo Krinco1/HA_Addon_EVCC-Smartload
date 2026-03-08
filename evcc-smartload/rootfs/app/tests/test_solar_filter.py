@@ -37,52 +37,56 @@ def _make_48h_entries(today_str, tomorrow_str, tz_suffix="Z"):
 class TestFilterTodaySolar:
 
     def test_48h_returns_only_today(self):
-        """48h data should be filtered to only today's 24 entries."""
+        """48h data should be filtered to only today's entries (local tz).
+
+        CET = UTC+1 in early March, so 2026-03-08T23:00Z = 2026-03-09T00:00 CET.
+        That means 23 of the 24 "today UTC" entries are actually today in CET,
+        and hour 23 UTC belongs to tomorrow in CET.
+        """
         now = datetime(2026, 3, 8, 14, 0, 0, tzinfo=timezone.utc)
         entries = _make_48h_entries("2026-03-08", "2026-03-09")
         result = filter_today_solar(entries, now=now)
-        assert len(result) == 24
-        for e in result:
-            assert "2026-03-08" in e["start"]
+        assert len(result) == 23
 
-    def test_24h_only_returns_all(self):
-        """24h-only data should not lose any entries."""
+    def test_24h_only_returns_today_entries(self):
+        """24h-only data filtered to today's local date entries."""
         now = datetime(2026, 3, 8, 14, 0, 0, tzinfo=timezone.utc)
         entries = _make_hourly_entries("2026-03-08")
         result = filter_today_solar(entries, now=now)
-        assert len(result) == 24
+        # 23 of 24 UTC entries fall on March 8 in CET (hour 23 UTC = March 9 CET)
+        assert len(result) == 23
 
     def test_empty_list(self):
         """Empty input returns empty output."""
         result = filter_today_solar([])
         assert result == []
 
-    def test_midnight_utc_plus_2(self):
-        """At midnight UTC+2 (22:00 UTC), local date is the next day."""
-        # 2026-03-08 22:00 UTC = 2026-03-09 00:00 Berlin (CET+1 in March before DST)
-        # Actually in March 8 CET is UTC+1, so 23:00 UTC = 00:00 CET March 9
+    def test_midnight_cet_switches_to_next_day(self):
+        """At 23:00 UTC = 00:00 CET, local date flips to March 9."""
         now = datetime(2026, 3, 8, 23, 0, 0, tzinfo=timezone.utc)
-        # Local Berlin time: 2026-03-09 00:00 (CET = UTC+1 in early March)
+        # Local Berlin time: 2026-03-09 00:00 (CET = UTC+1)
         entries = _make_48h_entries("2026-03-08", "2026-03-09")
         result = filter_today_solar(entries, now=now)
-        # "Today" in Berlin is March 9, so only tomorrow's entries match
+        # "Today" in Berlin is now March 9.
+        # From "today" UTC entries: only 23:00Z (=00:00 CET March 9) matches
+        # From "tomorrow" UTC entries: hours 00-22 (=01:00-23:00 CET March 9) match
+        # That's 1 + 23 = 24 entries
         assert len(result) == 24
-        for e in result:
-            assert "2026-03-09" in e["start"]
 
     def test_handles_z_suffix(self):
         """Entries with Z suffix are parsed correctly."""
         now = datetime(2026, 3, 8, 10, 0, 0, tzinfo=timezone.utc)
         entries = _make_48h_entries("2026-03-08", "2026-03-09", tz_suffix="Z")
         result = filter_today_solar(entries, now=now)
-        assert len(result) == 24
+        # 23 of 24: hour 23 UTC = March 9 CET
+        assert len(result) == 23
 
     def test_handles_offset_format(self):
-        """Entries with +02:00 offset are parsed correctly."""
+        """Entries with +01:00 offset are parsed correctly."""
         now = datetime(2026, 3, 8, 10, 0, 0, tzinfo=timezone.utc)
         entries = _make_48h_entries("2026-03-08", "2026-03-09", tz_suffix="+01:00")
         result = filter_today_solar(entries, now=now)
-        # March 8 entries with +01:00 -> local date March 8 -> matches today
+        # +01:00 entries: all 24 "March 8" entries convert to March 8 in Berlin (CET=UTC+1)
         assert len(result) == 24
 
     def test_calc_solar_surplus_same_for_48h_and_today_only(self):
