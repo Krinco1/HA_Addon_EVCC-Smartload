@@ -76,11 +76,10 @@ class VehicleManager:
 
         result = provider.poll(force=force)
         if result:
-            # Merge into existing data, preserve wallbox state from evcc
             existing = self._vehicle_data.get(name)
             if existing:
-                result.connected_to_wallbox = existing.connected_to_wallbox
-                result.charging = existing.charging
+                existing.update_from_api(result.soc, range_km=result.range_km)
+                return existing
             self._vehicle_data[name] = result
         return result
 
