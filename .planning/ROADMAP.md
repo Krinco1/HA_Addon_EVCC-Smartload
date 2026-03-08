@@ -47,7 +47,7 @@ Full details: `milestones/v1.1-ROADMAP.md`
 - [x] **Phase 13: PV Forecast & evcc Coexistence** - Fix PV forecast 2x factor and prevent SmartLoad from disrupting evcc PV surplus mode (completed 2026-03-08)
 - [x] **Phase 14: Vehicle Data Reliability** - Fix vehicle polling, stale detection, and ManualSoC race condition (completed 2026-03-08)
 - [x] **Phase 15: Charge Sequencer Transition** - Fix multi-vehicle queue delay on vehicle completion (completed 2026-03-08)
-- [ ] **Phase 16: EVCC-02 Gap Closure** - Fix departure urgency path and add "defers to evcc" decision log
+- [x] **Phase 16: EVCC-02 Gap Closure** - Fix departure urgency path and add "defers to evcc" decision log (completed 2026-03-08)
 
 ## Phase Details
 
@@ -140,4 +140,4 @@ Plans:
 | 13. PV Forecast & evcc Coexistence | v1.2 | 2/2 | Complete | 2026-03-08 |
 | 14. Vehicle Data Reliability | v1.2 | 2/2 | Complete | 2026-03-08 |
 | 15. Charge Sequencer Transition | v1.2 | 1/1 | Complete | 2026-03-08 |
-| 16. EVCC-02 Gap Closure | v1.2 | 0/1 | Not started | - |
+| 16. EVCC-02 Gap Closure | 1/1 | Complete   | 2026-03-08 | - |
