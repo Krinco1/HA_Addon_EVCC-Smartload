@@ -575,6 +575,15 @@ def main():
                 else:
                     _mode_status = mode_controller.get_status()
 
+            # Log when SmartLoad defers to evcc during PV surplus
+            if (_mode_status.get("active") and
+                _mode_status.get("current_mode") == "pv" and
+                state.pv_power > state.home_power + 300):
+                decision_log.observe(
+                    "SmartLoad defers to evcc (PV-Surplus, Modus: pv)",
+                    source="system",
+                )
+
             # --- Phase 12: LP-Gated Battery-to-EV Arbitrage ---
             all_vehicles = vehicle_monitor.get_all_vehicles()
             any_ev_connected = any(v.connected_to_wallbox for v in all_vehicles.values())
