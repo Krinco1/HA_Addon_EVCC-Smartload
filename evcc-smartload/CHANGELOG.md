@@ -2,6 +2,35 @@
 
 ---
 
+## v6.2.1 — Critical Vehicle Data Fixes (Phase 17.1)
+
+### Bugfixes
+
+**evcc API Client — Error Visibility + Retry**
+- `get_state()` loggt jetzt Fehler statt sie stumm zu schlucken
+- 1 automatischer Retry bei `ConnectionError` mit 2s Pause
+- `_login()` loggt Auth-Fehler als Warning
+
+**Vehicle Data Staleness Race**
+- `update_from_evcc()` setzt `last_update` und `data_source` immer wenn Fahrzeug verbunden ist — auch bei SoC=None
+- Behebt: Fahrzeug am Wallbox mit noch nicht synchronisiertem SoC zeigte "VERALTET" statt "verbunden"
+- `freshness` Property nutzt jetzt `last_update` (konsistent mit `is_data_stale()`)
+
+**Charge Sequencer Thread Safety**
+- `threading.Lock` schützt alle `requests`-Dict Zugriffe (Lesen + Schreiben)
+- Behebt: `RuntimeError: dictionary changed size during iteration` bei parallelem Telegram-Zugriff
+- `_urgency_reason()` nutzt neue `departure_store.get_raw_iso()` Public API statt privater `_lock`/`_times`
+
+**DataCollector Resilience**
+- Failure Counter für evcc-Verbindung: eskaliert von WARNING → ERROR nach 3 aufeinanderfolgenden Fehlschlägen
+- `evcc_reachable` Flag für Dashboard-Statusanzeige
+
+### Tests
+
+- 101 Unit Tests bestehen (0.40s), keine Regressionen
+
+---
+
 ## v6.2.0 — Bugfixes: PV Forecast, evcc Coexistence, Vehicle Polling, Charge Sequencer
 
 ### Bugfixes
