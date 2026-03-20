@@ -2,6 +2,53 @@
 
 ---
 
+## v6.3.0 — Vehicle Data Reliability & Tech Debt (Milestone v1.3)
+
+### Bugfixes (Phase 17.1)
+
+**evcc API Client — Error Visibility + Retry**
+- `get_state()` loggt jetzt Fehler statt sie stumm zu schlucken
+- 1 automatischer Retry bei `ConnectionError` mit 2s Pause
+- `_login()` loggt Auth-Fehler als Warning
+
+**Vehicle Data Staleness Race**
+- `update_from_evcc()` setzt `last_update` und `data_source` immer wenn Fahrzeug verbunden ist — auch bei SoC=None
+- `freshness` Property konsistent mit `is_data_stale()` (beide nutzen `last_update`)
+
+**Charge Sequencer Thread Safety**
+- `threading.Lock` schuetzt alle `requests`-Dict Zugriffe
+- `_urgency_reason()` nutzt `departure_store.get_raw_iso()` Public API
+
+**DataCollector Resilience**
+- Failure Counter fuer evcc-Verbindung: eskaliert WARNING → ERROR nach 3 Fehlschlaegen
+- `evcc_reachable` Flag fuer Dashboard-Statusanzeige
+
+### Feature (Phase 20)
+
+**`/status` API um Arbitrage-Daten erweitert**
+- Neues `battery_to_ev` Feld: active, available_kwh, ev_need_kwh, savings_ct
+- Daten sofort beim ersten Abruf verfuegbar (nicht erst nach SSE-Update)
+
+### Architektur-Entscheidung (Phase 17)
+
+**evcc Vehicle Polling Migration: NO-GO**
+- evcc `poll.mode: always` pollt nur das dem Loadpoint zugewiesene Fahrzeug
+- Bei 3 EVs auf 1 Wallbox: nur 1 bekommt SoC-Updates
+- SmartLoad behaelt eigenes Cloud-Polling (KiaProvider, RenaultProvider)
+- Dokumentation korrigiert: `poll.mode` gehoert zum Loadpoint, nicht zum Vehicle
+
+### Tech Debt (Phase 20)
+
+- DEBT-01: `rl_bootstrap_max_records` config field bereits entfernt (verifiziert)
+- DEBT-02: `/departure-times` Endpoint bereits entfernt (verifiziert)
+- DEBT-03: `/status` API liefert Arbitrage-Daten sofort (s.o.)
+
+### Tests
+
+- 101 Unit Tests bestehen, keine Regressionen
+
+---
+
 ## v6.2.1 — Critical Vehicle Data Fixes (Phase 17.1)
 
 ### Bugfixes
