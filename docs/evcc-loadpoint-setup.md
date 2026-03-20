@@ -4,35 +4,44 @@
 
 SmartLoad nutzt **1 Loadpoint** (Kostal Enector) mit **3 Fahrzeugen**:
 
-| Fahrzeug  | Template       | Cloud-Provider | poll.mode | Cache |
-|-----------|---------------|----------------|-----------|-------|
-| KIA_EV9   | kia           | Kia Connect    | `always`  | 30m   |
-| my_Twingo | renault       | Renault ZE     | `always`  | 15m   |
-| ORA_03    | offline       | keiner         | -         | -     |
+| Fahrzeug  | Template       | Cloud-Provider | Cache |
+|-----------|---------------|----------------|-------|
+| KIA_EV9   | kia           | Kia Connect    | 30m   |
+| my_Twingo | renault       | Renault ZE     | 15m   |
+| ORA_03    | offline       | keiner         | -     |
 
-**Wichtig:** SmartLoad liest den SoC aus dem `vehicles[]`-Array in `/api/state`, **nicht** aus `loadpoints[].vehicleSoc`. Das `vehicles[]`-Array liefert SoC-Daten unabhaengig davon, ob ein Fahrzeug gerade an der Wallbox haengt. So kann SmartLoad jederzeit den aktuellen Ladestand aller Fahrzeuge kennen.
+## SoC-Datenquellen
 
-## Vehicle-Konfiguration
+**SmartLoad nutzt eigenes Cloud-Polling** (KiaProvider, RenaultProvider) fuer den SoC aller Fahrzeuge. evcc liefert den SoC nur fuer das aktuell am Loadpoint zugewiesene Fahrzeug.
 
-### KIA_EV9
+| Datenquelle | Was sie liefert | Wann verfuegbar |
+|-------------|-----------------|-----------------|
+| SmartLoad Cloud-Polling | SoC fuer alle Fahrzeuge | Immer (unabhaengig von Wallbox) |
+| evcc `loadpoints[].vehicleSoc` | SoC des zugewiesenen Fahrzeugs | Wenn Fahrzeug am LP zugewiesen |
+| evcc `vehicles[].soc` | Immer `null` | Nicht nutzbar fuer SoC-Monitoring |
 
-- **poll.mode: always** — evcc pollt den SoC regelmaessig, auch wenn das Fahrzeug nicht an der Wallbox haengt
-- **Cache: 30m** — konservativ, um Account-Locks bei Kia Connect zu vermeiden (Kia ist restriktiver als Renault)
-- Kia Connect API hat Rate-Limits; 30 Minuten Cache ist ein sicherer Startwert
+## evcc poll.mode (Referenz)
 
-### my_Twingo (Renault)
+> **Hinweis:** `poll.mode` ist ein **Loadpoint-Setting**, kein Vehicle-Setting.
+> SmartLoad nutzt dieses Setting nicht, da eigenes Cloud-Polling aktiv ist.
 
-- **poll.mode: always** — wie bei Kia, permanentes Polling
-- **Cache: 15m** — Renault ZE API ist weniger restriktiv, daher kuerzerer Cache
-- Renault hatte bisher keine Account-Lock-Probleme
+Falls `poll.mode: always` am Loadpoint gewuenscht ist (z.B. fuer evcc-eigene Anzeige):
 
-### ORA_03
+```yaml
+# Korrekte Syntax — unter loadpoints, NICHT unter vehicles
+loadpoints:
+  - title: Wallbox
+    charger: enector
+    soc:
+      poll:
+        mode: always     # charging | connected | always
+        interval: 60m
+      estimate: true
+```
 
-- **template: offline** — bleibt unveraendert
-- Kein Cloud-Provider verfuegbar, SoC wird manuell eingegeben
-- Wird in dieser Validierung nicht ueberwacht
+**Einschraenkung:** `poll.mode: always` pollt nur das aktuell dem Loadpoint zugewiesene Fahrzeug. Bei 3 Fahrzeugen auf 1 Loadpoint bekommt nur 1 Fahrzeug SoC-Updates.
 
-## Beispiel: vehicles-Sektion in evcc.yaml
+## Vehicle-Konfiguration in evcc.yaml
 
 ```yaml
 vehicles:
@@ -43,8 +52,7 @@ vehicles:
     user: <kia-connect-email>
     password: <kia-connect-password>
     vin: <VIN>
-    poll:
-      mode: always
+    capacity: 99.8
     cache: 30m
 
   - name: my_Twingo
@@ -54,38 +62,36 @@ vehicles:
     user: <renault-email>
     password: <renault-password>
     vin: <VIN>
-    poll:
-      mode: always
+    capacity: 22
     cache: 15m
 
   - name: ORA_03
     type: template
     template: offline
     title: ORA 03
+    capacity: 48
 ```
 
-**Hinweis:** Nur die `vehicles`-Sektion ist hier gezeigt. Die restliche evcc.yaml (site, loadpoints, meters etc.) bleibt unveraendert.
-
-## Pruefliste vor Start
-
-Nach Aenderung der evcc.yaml:
+## Pruefliste nach evcc.yaml-Aenderung
 
 1. **evcc neu starten**
    ```bash
    sudo systemctl restart evcc
    ```
 
-2. **evcc UI pruefen** — alle 3 Fahrzeuge muessen in der Weboberflaechesichtbar sein (http://<evcc-host>:7070)
+2. **evcc UI pruefen** — alle 3 Fahrzeuge muessen sichtbar sein
 
-3. **`/api/state` manuell abrufen** und `vehicles`-Array pruefen:
+3. **`/api/state` manuell abrufen:**
    ```bash
-   curl -s http://<evcc-host>:7070/api/state | python3 -m json.tool | grep -A5 '"vehicles"'
+   curl -s http://<evcc-host>:7070/api/state | python3 -m json.tool | grep -A5 '"loadpoints"'
    ```
-   Erwartung: `vehicles` enthaelt Eintraege fuer `KIA_EV9`, `my_Twingo` und `ORA_03` mit jeweiligem `soc`-Wert.
 
-4. **Logs pruefen** — keine Authentifizierungsfehler in den evcc-Logs:
+4. **Logs pruefen** — keine Auth-Fehler:
    ```bash
    journalctl -u evcc --since "5 minutes ago" | grep -i "error\|auth\|lock"
    ```
 
-5. **30 Minuten warten**, dann erneut `/api/state` pruefen — SoC-Werte sollten sich aktualisiert haben (sofern Fahrzeug nicht voll geladen und stationaer).
+## Validierungsergebnis (2026-03-20)
+
+**NO-GO fuer evcc-only Polling.** Siehe `docs/evcc-validation-report.md`.
+SmartLoad behaelt eigenes Cloud-Polling fuer alle 3 Fahrzeuge bei.
