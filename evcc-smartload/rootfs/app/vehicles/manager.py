@@ -126,9 +126,10 @@ class VehicleManager:
             vd.connected_to_wallbox = connected
             vd.charging = charging
 
-            # SoC from evcc (only when connected)
-            if evcc_soc is not None and vd.connected_to_wallbox:
-                vd.update_from_evcc(float(evcc_soc), vd.connected_to_wallbox, vd.charging)
+            # Update from evcc: always when connected (even if SoC is None yet)
+            if vd.connected_to_wallbox:
+                soc_val = float(evcc_soc) if evcc_soc is not None else None
+                vd.update_from_evcc(soc_val, vd.connected_to_wallbox, vd.charging)
 
     def _match_vehicle(self, name: str) -> Optional[str]:
         """Find configured vehicle name matching evcc vehicle name (case-insensitive)."""

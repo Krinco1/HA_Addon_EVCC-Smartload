@@ -220,6 +220,8 @@ class DataCollector:
         self._evcc_raw: Optional[dict] = None
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._evcc_fail_count: int = 0
+        self.evcc_reachable: bool = True
 
     def start_background_collection(self):
         """Start background data collection thread."""
@@ -250,8 +252,15 @@ class DataCollector:
         # Fetch evcc state
         evcc_state = self.evcc.get_state()
         if not evcc_state:
-            log("warning", "DataCollector: evcc.get_state() returned None — evcc unreachable?")
+            self._evcc_fail_count += 1
+            self.evcc_reachable = False
+            level = "error" if self._evcc_fail_count >= 3 else "warning"
+            log(level, f"DataCollector: evcc.get_state() returned None — "
+                       f"evcc unreachable? (consecutive failures: {self._evcc_fail_count})")
             return
+
+        self._evcc_fail_count = 0
+        self.evcc_reachable = True
 
         # Log evcc loadpoint summary on first successful collect
         if self._state is None:

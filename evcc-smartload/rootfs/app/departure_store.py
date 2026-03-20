@@ -155,6 +155,11 @@ class DepartureTimeStore:
             # Fallback: next occurrence of default_hour
             return self._next_default(now)
 
+    def get_raw_iso(self, vehicle_name: str) -> Optional[str]:
+        """Return the raw ISO string for vehicle_name, or None if not set."""
+        with self._lock:
+            return self._times.get(vehicle_name)
+
     def clear(self, vehicle_name: str) -> None:
         """Remove stored departure time for vehicle_name and persist."""
         with self._lock:

@@ -31,17 +31,30 @@ class EvccClient:
                 timeout=10,
             )
             self._logged_in = r.status_code == 200
-        except Exception:
-            pass
+            if not self._logged_in:
+                log("warning", f"evcc login failed: HTTP {r.status_code}")
+        except Exception as e:
+            log("warning", f"evcc login failed: {e}")
 
     def get_state(self) -> Optional[Dict]:
         self._login()
-        try:
-            r = self.sess.get(f"{self.base_url}/api/state", timeout=15)
-            data = r.json()
-            return data.get("result", data)
-        except Exception:
-            return None
+        for attempt in range(2):
+            try:
+                r = self.sess.get(f"{self.base_url}/api/state", timeout=15)
+                data = r.json()
+                return data.get("result", data)
+            except requests.ConnectionError as e:
+                if attempt == 0:
+                    log("debug", f"evcc.get_state() connection error, retrying: {e}")
+                    import time
+                    time.sleep(2)
+                    continue
+                log("warning", f"evcc.get_state() failed after retry: {e}")
+                return None
+            except Exception as e:
+                log("warning", f"evcc.get_state() failed: {e}")
+                return None
+        return None
 
     def get_loadpoint_mode(self, lp_id: int = 0) -> Optional[str]:
         """Return current loadpoint mode ('off'/'now'/'minpv'/'pv') or None if unreachable."""

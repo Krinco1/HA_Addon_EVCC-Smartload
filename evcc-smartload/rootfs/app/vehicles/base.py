@@ -60,12 +60,12 @@ class VehicleData:
 
     @property
     def freshness(self) -> str:
-        """'live' when at wallbox with evcc data, 'fresh' if < 12h, 'stale' if >= 12h or never polled."""
+        """'live' when at wallbox with evcc data, 'fresh' if < 12h, 'stale' if >= 12h or no data."""
         if self.connected_to_wallbox and self.data_source in ("evcc", "live"):
             return "live"
-        if self.last_successful_poll is None:
+        if self.last_update is None:
             return "stale"
-        age_h = (datetime.now(timezone.utc) - self.last_successful_poll.astimezone(timezone.utc)).total_seconds() / 3600
+        age_h = (datetime.now(timezone.utc) - self.last_update.astimezone(timezone.utc)).total_seconds() / 3600
         return "fresh" if age_h < 12 else "stale"
 
     def get_data_age_string(self) -> str:
@@ -101,10 +101,10 @@ class VehicleData:
         """Update vehicle state from evcc websocket data."""
         self.connected_to_wallbox = connected
         self.charging = charging
+        self.last_update = datetime.now(timezone.utc)
+        self.data_source = "evcc"
         if evcc_soc is not None:
             self.soc = evcc_soc
-            self.last_update = datetime.now(timezone.utc)
-            self.data_source = "evcc"
 
     def update_from_api(self, soc: float, range_km: Optional[float] = None):
         """Update vehicle state from direct API poll."""

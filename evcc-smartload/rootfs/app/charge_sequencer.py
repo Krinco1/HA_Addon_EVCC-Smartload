@@ -12,6 +12,7 @@ Key rules:
   5. Solar windows preferred for EVs with large need
 """
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -71,6 +72,7 @@ class ChargeSequencer:
         self.evcc = evcc
         self.requests: Dict[str, ChargeRequest] = {}
         self.schedule: List[ChargeSlot] = []
+        self._lock = threading.Lock()
         self.quiet = QuietHoursConfig(
             enabled=cfg.quiet_hours_enabled,
             start_hour=cfg.quiet_hours_start,
@@ -107,34 +109,38 @@ class ChargeSequencer:
             hours_needed=round(hours, 2),
             confirmed_at=datetime.now(timezone.utc),
         )
-        self.requests[vehicle] = req
+        with self._lock:
+            self.requests[vehicle] = req
         log("info", f"ChargeSequencer: {vehicle} → {target_soc}% ({need:.1f} kWh, {hours:.1f}h)")
         return req
 
     def update_soc(self, vehicle: str, new_soc: float):
         """Update SoC after a charge cycle (reduces need_kwh)."""
-        if vehicle in self.requests:
-            req = self.requests[vehicle]
-            req.current_soc = new_soc
-            req.need_kwh = max(0.0, (req.target_soc - new_soc) / 100.0 * req.capacity_kwh)
-            if req.need_kwh < 0.5:
-                req.status = "done"
-                log("info", f"ChargeSequencer: {vehicle} done ({new_soc:.0f}%)")
+        with self._lock:
+            if vehicle in self.requests:
+                req = self.requests[vehicle]
+                req.current_soc = new_soc
+                req.need_kwh = max(0.0, (req.target_soc - new_soc) / 100.0 * req.capacity_kwh)
+                if req.need_kwh < 0.5:
+                    req.status = "done"
+                    log("info", f"ChargeSequencer: {vehicle} done ({new_soc:.0f}%)")
 
     def remove_request(self, vehicle: str):
-        self.requests.pop(vehicle, None)
+        with self._lock:
+            self.requests.pop(vehicle, None)
 
     def expire_old_requests(self, max_age_hours: int = 36):
         """Remove stale requests (driver never connected vehicle)."""
         now = datetime.now(timezone.utc)
-        expired = [
-            v for v, r in self.requests.items()
-            if (now - r.confirmed_at).total_seconds() / 3600 > max_age_hours
-            or r.status == "done"
-        ]
-        for v in expired:
-            log("info", f"ChargeSequencer: expiring {v} (age/done)")
-            del self.requests[v]
+        with self._lock:
+            expired = [
+                v for v, r in self.requests.items()
+                if (now - r.confirmed_at).total_seconds() / 3600 > max_age_hours
+                or r.status == "done"
+            ]
+            for v in expired:
+                log("info", f"ChargeSequencer: expiring {v} (age/done)")
+                del self.requests[v]
 
     # ------------------------------------------------------------------
     # Planning
@@ -150,10 +156,11 @@ class ChargeSequencer:
         """Calculate optimal charge schedule."""
         self.expire_old_requests()
 
-        pending = [
-            r for r in self.requests.values()
-            if r.status in ("pending", "scheduled") and r.need_kwh > 0.5
-        ]
+        with self._lock:
+            pending = [
+                r for r in self.requests.values()
+                if r.status in ("pending", "scheduled") and r.need_kwh > 0.5
+            ]
         if not pending:
             self.schedule = []
             return []
@@ -215,8 +222,7 @@ class ChargeSequencer:
             else:
                 hours_remaining = max(0.5, hours_remaining)
                 # Check whether this is a user-provided departure or the default
-                with self.departure_store._lock:
-                    iso = self.departure_store._times.get(req.vehicle_name)
+                iso = self.departure_store.get_raw_iso(req.vehicle_name)
                 if iso:
                     return f"Abfahrt in {hours_remaining:.0f}h, SoC {req.current_soc:.0f}%"
                 else:
@@ -330,7 +336,8 @@ class ChargeSequencer:
         """Send current schedule to evcc (loadpoint 1)."""
         active = self._get_active_slot(now)
         if active:
-            req = self.requests.get(active.vehicle_name)
+            with self._lock:
+                req = self.requests.get(active.vehicle_name)
             if req:
                 self.evcc.set_loadpoint_targetsoc(1, req.target_soc)
             mode = "pv" if active.source == "solar" else "minpv"
@@ -428,7 +435,9 @@ class ChargeSequencer:
         """
         now = datetime.now(timezone.utc)
         result = []
-        for v, r in self.requests.items():
+        with self._lock:
+            requests_snapshot = dict(self.requests)
+        for v, r in requests_snapshot.items():
             entry = {
                 "vehicle": v,
                 "driver": r.driver_name,
