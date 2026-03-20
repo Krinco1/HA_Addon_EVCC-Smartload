@@ -527,7 +527,36 @@ class WebServer:
             # v5
             "sequencer_enabled": self.sequencer is not None,
             "telegram_enabled": self.driver_mgr.telegram_enabled if self.driver_mgr else False,
+            # v6.2: battery-to-EV arbitrage summary (DEBT-03)
+            "battery_to_ev": self._battery_to_ev_summary(state),
         }
+
+    def _battery_to_ev_summary(self, state) -> dict:
+        """Lightweight battery-to-EV arbitrage summary for /status API."""
+        if not state:
+            return {"active": False, "available_kwh": 0, "ev_need_kwh": 0, "savings_ct": 0}
+        try:
+            vehicles = self.vehicle_monitor.get_all_vehicles()
+            bat_soc = state.battery_soc
+            bat_available = max(0, (bat_soc - self.cfg.battery_min_soc) / 100 * self.cfg.battery_capacity_kwh)
+            total_ev_need = sum(
+                max(0, (self.cfg.ev_target_soc - v.get_effective_soc()) / 100 * v.capacity_kwh)
+                for v in vehicles.values()
+                if v.get_effective_soc() > 0 or v.connected_to_wallbox
+            )
+            eff = self.cfg.battery_charge_efficiency * self.cfg.battery_discharge_efficiency
+            bat_cost_ct = self.cfg.battery_max_price_ct / eff if eff > 0 else 99
+            current_ct = state.current_price * 100
+            savings = current_ct - bat_cost_ct
+            active = savings >= self.cfg.battery_to_ev_min_profit_ct and total_ev_need > 0.5
+            return {
+                "active": active,
+                "available_kwh": round(bat_available, 1),
+                "ev_need_kwh": round(total_ev_need, 1),
+                "savings_ct": round(savings, 1),
+            }
+        except Exception:
+            return {"active": False, "available_kwh": 0, "ev_need_kwh": 0, "savings_ct": 0}
 
     def _api_vehicles(self) -> dict:
         vehicles = self.vehicle_monitor.get_all_vehicles()
