@@ -59,18 +59,12 @@ class OverrideManager:
         """
         now = datetime.now()
 
-        # Quiet hours guard
-        if self._is_quiet(now):
-            end_hour = getattr(self.cfg, "quiet_hours_end", 6)
-            end_str = f"{end_hour:02d}:00"
-            msg = f"Leise-Stunden aktiv, Laden startet um {end_str}"
-            log("info", f"OverrideManager: Boost blocked by quiet hours for {vehicle_name}")
-            if chat_id and self.notifier:
-                try:
-                    self.notifier.bot.send_message(chat_id, f"Boost Charge blockiert: {msg}")
-                except Exception as e:
-                    log("warning", f"OverrideManager: could not send quiet-hours Telegram message: {e}")
-            return {"ok": False, "quiet_hours_blocked": True, "message": msg}
+        # Boost is an explicit user override — it must work even during quiet hours.
+        # Quiet hours only suppress automatic multi-EV switching (ChargeSequencer);
+        # a deliberate Boost click is a "I need charge now" signal that overrides
+        # all schedule constraints. (Previously the quiet-hour block was never
+        # reached due to a UTC bug; with the 6.3.1 timezone fix it started firing
+        # and silently killed nighttime boost.)
 
         expires = now + timedelta(minutes=OVERRIDE_DURATION_MINUTES)
 

@@ -68,16 +68,39 @@ class RenaultProvider:
             force: If True, re-initialize client to get fresh data (used by Poll Now).
         """
         try:
+            # aiohttp.ClientSession is bound to the loop it was created in.
+            # If we recreate the loop, the old session becomes unusable
+            # ("attached to different loop"). Reset session + client together.
             if self._loop is None or self._loop.is_closed():
                 self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                self._session = None
+                self._client = None
+                self._vehicle_obj = None
             if force:
                 log("info", f"RenaultProvider {self.evcc_name}: force refresh — reinitializing client")
+                # Close session inside the loop before dropping references.
+                if self._session is not None and not self._session.closed:
+                    try:
+                        self._loop.run_until_complete(self._session.close())
+                    except Exception:
+                        pass
+                self._session = None
                 self._client = None
                 self._vehicle_obj = None
             return self._loop.run_until_complete(self._async_poll())
         except Exception as e:
             self.record_failure()
             log("error", f"RenaultProvider {self.evcc_name} poll error: {e}\n{traceback.format_exc()}")
+            # On unknown failure drop the session so next poll starts clean.
+            self._client = None
+            self._vehicle_obj = None
+            if self._session is not None and not self._session.closed:
+                try:
+                    self._loop.run_until_complete(self._session.close())
+                except Exception:
+                    pass
+            self._session = None
             return None
 
     async def _async_poll(self) -> Optional[VehicleData]:

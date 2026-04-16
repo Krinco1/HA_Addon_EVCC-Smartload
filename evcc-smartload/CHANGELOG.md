@@ -2,6 +2,41 @@
 
 ---
 
+## v6.3.2 — Boost & Twingo Hotfix (2026-04-16)
+
+**Zwei vom User gemeldete Folge-Regressionen aus v6.3.1.**
+
+### Boost funktioniert wieder während der Quiet-Hours
+
+- `override_manager.activate()` pruefte `_is_quiet(now)` und brach Boost lautlos ab,
+  sobald die aktuelle lokale Stunde in der konfigurierten Ruhezeit lag (21-06).
+  Vor v6.3.1 hatte der UTC-Timezone-Bug diesen Check faktisch deaktiviert (UTC 22:00
+  = 20:00 lokal im Sommer → nicht in Quiet Hours → Boost ging). Mit dem 6.3.1-
+  Lokalzeit-Fix wurde der Block endlich scharf — aber der Block selbst war die
+  falsche Design-Entscheidung: ein expliziter Boost-Klick ist ein "Ich brauche
+  jetzt Strom" vom User und muss Schedule-Constraints brechen.
+- Fix: Quiet-Hours-Block in `override_manager.activate()` komplett entfernt.
+  Quiet Hours gelten weiter nur fuer den automatischen Sequencer-EV-Wechsel.
+
+### Twingo (Renault) Provider — Cross-Loop-Bug
+
+- `aiohttp.ClientSession` ist an den asyncio-Loop gebunden, in dem sie erzeugt wurde.
+  Der Code erzeugte Loop und Session getrennt: bei "Poll Now" (force=True) wurde
+  nur der Client resetted, nicht die Session → neuer Client kam mit alter Session
+  → aiohttp warf "attached to a different loop" oder still failing requests. Beim
+  Loop-Recreate (nach is_closed) wurde die alte Session ebenfalls liegengelassen.
+- Fix in `vehicles/renault_provider.py`:
+  - Loop + Session + Client werden immer gemeinsam recreated.
+  - `asyncio.set_event_loop(self._loop)` gesetzt (noetig bei Python 3.14/Alpine).
+  - Beim `force`-Refresh wird die alte Session im alten Loop sauber geschlossen.
+  - Bei jedem Poll-Fehler wird die Session gedroppt, damit der naechste Poll frisch startet.
+
+### Tests
+
+- 101/101 Unit Tests gruen, keine Regressionen.
+
+---
+
 ## v6.3.1 — Code-Review Bugfixes (2026-04-16)
 
 Umfangreicher Bugfix-Release nach 5-Perspektiven Code-Review
