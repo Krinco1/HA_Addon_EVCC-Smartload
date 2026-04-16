@@ -228,8 +228,11 @@ class ManualSocStore:
 
     def _save(self):
         try:
-            with open(MANUAL_SOC_PATH, "w") as f:
+            import os as _os
+            tmp_path = f"{MANUAL_SOC_PATH}.tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(self._data, f, indent=2)
+            _os.replace(tmp_path, MANUAL_SOC_PATH)
         except Exception as e:
             log("error", f"Failed to save manual SoC: {e}")
 

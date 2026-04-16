@@ -158,9 +158,9 @@ class TestApplyMode(unittest.TestCase):
         self.ctrl = EvccModeController(self.evcc, self.cfg)
 
     def test_apply_mode_sends_command_when_mode_changes(self):
-        """set_loadpoint_mode called when target differs from current."""
+        """set_loadpoint_mode called when target differs from current — uses 1-based LP id."""
         self.ctrl._apply_mode("now", "pv")
-        self.evcc.set_loadpoint_mode.assert_called_once_with(0, "now")
+        self.evcc.set_loadpoint_mode.assert_called_once_with(1, "now")
 
     def test_apply_mode_skips_when_mode_unchanged(self):
         """set_loadpoint_mode NOT called when target == current."""

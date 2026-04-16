@@ -203,10 +203,25 @@ class HorizonPlanner:
         if not hourly:
             return None
 
-        # Expand hourly → 15-min slots (4 slots per hour)
-        prices: List[float] = []
-        for _hour_dt, price_eur in hourly:
-            prices.extend([price_eur] * 4)
+        # Align slot 0 with the CURRENT 15-min window.
+        # Expand each hour into 4 timestamped slots, then drop any slot whose
+        # start is before the current 15-min boundary — otherwise price_96[0]
+        # carries the previous hour's price and slot-0 planning is off.
+        current_slot_start = now.replace(
+            minute=(now.minute // 15) * 15, second=0, microsecond=0, tzinfo=timezone.utc,
+        )
+
+        timed_prices: List[Tuple[datetime, float]] = []
+        for hour_dt, price_eur in hourly:
+            for q in range(4):
+                slot_start = hour_dt + timedelta(minutes=15 * q)
+                timed_prices.append((slot_start, price_eur))
+
+        timed_prices = [
+            (s, p) for s, p in timed_prices if s >= current_slot_start
+        ]
+        timed_prices.sort(key=lambda x: x[0])
+        prices: List[float] = [p for _, p in timed_prices]
 
         if len(prices) < 32:
             log("info", f"HorizonPlanner: only {len(prices)} price slots available (need >= 32)")

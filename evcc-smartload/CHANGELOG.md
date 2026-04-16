@@ -2,6 +2,143 @@
 
 ---
 
+## v6.3.1 — Code-Review Bugfixes (2026-04-16)
+
+Umfangreicher Bugfix-Release nach 5-Perspektiven Code-Review
+(Claude Opus + GPT-5 + Gemini 3.1 Pro Cross-AI Review, ~120 Findings).
+Viele Komponenten liefen seit v1.3 fehlerhaft ohne sichtbare Fehlermeldung.
+
+### CRITICAL Fixes (Production Bugs)
+
+**Main-Loop Crash bei aktivem Sequencer**
+- `decision_log.log_main_cycle` iterierte `get_requests_summary()` als Dict,
+  Methode liefert aber seit Phase 7 eine Liste. Wirft AttributeError in jedem Cycle
+  sobald ein Charge-Request existiert → Main-Loop sprang in Exception-Handler.
+  Fix: iteriert jetzt die Liste direkt (`decision_log.py:170`).
+
+**EvccModeController sendete an falschen Loadpoint**
+- `_apply_mode()` verwendete `lp_id=0` — evcc REST-API ist aber 1-basiert
+  (Sequencer/OverrideManager nutzten korrekt `lp_id=1`). Alle Mode-Kommandos
+  feuerten 404 → Mode-Steuerung funktionierte nie.
+  Fix: konstante `LOADPOINT_ID = 1`; Test angepasst (`evcc_mode_controller.py:227`).
+
+**Sequencer cancelte aktive Boost-Overrides**
+- `main.py` rief `sequencer.apply_to_evcc()` auch wenn ein Boost-Override
+  aktiv war. Der Sequencer setzte den Loadpoint je nach Schedule auf `off` oder
+  anderen Modus und killte den gerade gestarteten Boost sofort.
+  Fix: Sequencer-Apply wird bei aktivem Override uebersprungen (`main.py:684`).
+
+**PV-Unit-Heuristik zerstoerte Forecast-Korrektur**
+- `pv_kw = pv_power / 1000 if pv_power > 100 else pv_power` — bei Daemmerung
+  (z.B. 50 W) wurde "50" als 50 kW an den Forecaster weitergereicht.
+  Korrekturkoeffizient wurde auf 3.0 geclampt → alle PV-Forecasts um Faktor 3
+  ueberschaetzt → LP-Plaene systematisch falsch.
+  Fix: `pv_power / 1000.0` immer (`main.py:364`).
+
+### HIGH Fixes (Funktional kaputt)
+
+**Quiet-Hours & Override-Manager in UTC statt Lokalzeit**
+- Alpine Container laeuft in UTC. `quiet_hours_start=21` wurde als 21:00 UTC
+  interpretiert → Ruhezeiten schalten in DE 1-2h zu spaet/frueh.
+  Fix: neues Modul `time_util.py` mit `local_hour()` / `local_now()` via
+  `ZoneInfo(TZ-env || Europe/Berlin)`. Angewendet in `charge_sequencer._is_quiet`,
+  `charge_sequencer.get_pre_quiet_recommendation`, `override_manager._is_quiet`,
+  `optimizer/holistic._assess_battery_urgency`.
+
+**ForecastReliability nutzte falschen Slot-Index**
+- `pv_96[current_slot_idx]` — aber Forecaster liefern slot 0 = "jetzt",
+  nicht absolute Tagesslots. MAE wurde mit zufaellig versetzten Paaren berechnet,
+  Konfidenzen rauschten. Fix: immer `pv_96[0]` / `consumption_96[0]`.
+
+**RL lernte mit falschem Action-Index (Off-by-one-Cycle)**
+- `learn_from_correction(last_state, _rl_action_idx, reward, state)` uebergab
+  den Action-Idx vom AKTUELLEN Cycle, gehoert aber zum Uebergang
+  `last_state → state` (voriger Cycle). Q-Values trainierten mit verdrehten
+  Aktionen. Fix: `last_rl_action_idx` / `last_rl_bat_delta_ct` / `last_rl_ev_delta_ct`
+  puffern und im Folgecycle im Reward-Update verwenden (`main.py:288-291, 719, 743`).
+
+**LP-Preisarray nicht auf aktuellen 15-min-Slot aligned**
+- `_tariffs_to_96slots` akzeptierte Stundentarife ab `now - 1h`, expandierte
+  stumpf zu 4 Slots → `price_96[0]` trug oft den Preis der Vorstunde. Planungsfehler
+  im Slot 0. Fix: Slots werden mit Zeitstempel expandiert und auf das aktuelle
+  15-min-Fenster gefiltert (`optimizer/planner.py:201-217`).
+
+### Zusaetzliche Fixes
+
+**RL State-Features 13-24 waren konstant 0**
+- `SystemState.price_forecast` und `SystemState.pv_forecast` wurden nie
+  befuellt → 12 von 31 Feature-Dimensionen waren tote Bits. RL lernte in
+  kollabiertem State-Space. Fix: aus `tariffs[:6]` (EUR/kWh) und `pv_96` (W) in
+  der Data-Pipeline assemblieren (`main.py:373-396`).
+
+**ev_power hardcoded auf 0.0**
+- `DataCollector._collect_once` setzte `ev_power=0.0` hart, obwohl evcc
+  `chargePower` liefert → History und RL-Reward-Proxy arbeiteten mit falschen
+  Zahlen. Fix: `ev_power_w = float(lp.get("chargePower", 0))` (`vehicle_monitor.py:302-322`).
+
+**`hours_cheap_remaining` zaehlte Slots statt Stunden**
+- Bei 15-min-Spot-Tarifen 4× zu gross. Fix: Slot-Dauer aus `start`/`end`
+  berechnen, in Stunden umrechnen (`main.py:336-352`).
+
+**`solar_forecast_total_kwh` Unit-Detection fehlerhaft**
+- `solar_today[0].value > 100` schlug vor Sonnenaufgang (0 W) fehl → Gesamtwert
+  um Faktor 1000 falsch. Fix: Peak-Value statt Index 0 pruefen (`main.py:353-363`).
+
+**HolisticOptimizer nutzt lokale Monatszeit**
+- `datetime.now().month` im UTC-Container lieferte Drift am Jahreswechsel.
+  Fix: `local_now().month` (`optimizer/holistic.py:237`).
+
+**Sequencer ignorierte Abfahrts-Deadlines**
+- `_assign_time_windows` plante Slots nach `departure_dt` ein. Fix: filtert
+  verfuegbare Hours gegen `departure_store.get(vehicle_name)`
+  (`charge_sequencer.py:275-290`).
+
+**Arbitrage las veralteten DynamicBuffer-State**
+- `run_battery_arbitrage` lief vor `buffer_calc.step()` → griff auf Daten vom
+  vorigen Cycle zu. Fix: Buffer-Step vor Arbitrage (`main.py:644-660`).
+
+**JSON-Writes ohne Atomic-Rename**
+- `Comparator.save`, `ManualSocStore._save`, `DepartureTimeStore._save`
+  schrieben direkt. Crash mitten im Write korrumpiert Datei. Fix: schreiben in
+  `.tmp` + `os.replace()` (`comparator.py:397`, `state.py:231`, `departure_store.py:216`).
+
+### Security Fixes
+
+**Telegram Bot: Sender-Whitelist**
+- Callbacks und Text-Nachrichten wurden ohne Sender-Pruefung verarbeitet. Jeder
+  mit Bot-Kenntnis konnte `/boost` fremder Fahrzeuge ausloesen. Fix:
+  `TelegramBot.authorize` Callable prueft `chat_id` gegen
+  `drivers.yaml`. Unbekannte Chats werden stumm verworfen. `text_handler`-Prefix
+  wird nicht mehr als Callback-Data-Match missverstanden
+  (`notification.py:36-37, 100-131, 212`).
+
+**Telegram HTML-Injection**
+- `parse_mode: HTML` + User-Input aus `vehicle_name` / `driver_name` ohne
+  Escaping. Fix: `_esc()` Helper auf allen user-controllable Werten
+  (`notification.py:20-28` + 7 Ausgabestellen).
+
+### Uebersprungen
+
+- Port 8099 Ingress-Hardening: bewusste Nutzer-Entscheidung (LAN als
+  vertrauenswuerdig eingestuft, 2026-04-16).
+- LP Mutual-Exclusion-Constraint: Gemini 3.1 Pro bestaetigte B2-Finding als
+  False-Positive (Round-trip-Efficiency ist implizit ueber SoC-Dynamik korrekt).
+
+### Review-Reports
+
+- `.planning/REVIEW.md` — Claude Opus: ~70 Findings (Bugs/Quality)
+- `.planning/SECURITY.md` — 18 Findings (Security)
+- `.planning/AI-REVIEW.md` — 28 Findings (Logic/Math)
+- `.planning/GPT5-REVIEW.md` — GPT-5 Cross: 4 neue Bugs + 4 False-Positives korrigiert
+- `.planning/GEMINI-REVIEW.md` — Gemini 3.1 Pro Cross: 1 False-Positive korrigiert
+- `.planning/CODE-REVIEW-SUMMARY.md` — Konsolidierter Top-10 Fix-Plan
+
+### Tests
+
+- 101 Unit Tests bestehen (1 Test fuer lp_id=1 angepasst)
+
+---
+
 ## v6.3.0 — Vehicle Data Reliability & Tech Debt (Milestone v1.3)
 
 ### Bugfixes (Phase 17.1)

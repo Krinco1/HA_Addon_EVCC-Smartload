@@ -10,6 +10,7 @@ Design:
   on_soc_response() → ChargeSequencer.add_request()
 """
 
+import html
 import threading
 import time
 from datetime import datetime, timezone
@@ -18,6 +19,17 @@ from typing import Callable, Dict, List, Optional
 import requests
 
 from logging_util import log
+
+
+def _esc(value) -> str:
+    """HTML-escape a Telegram message fragment (parse_mode=HTML is always on).
+
+    Prevents <b>{vehicle_name}</b> injection when vehicle_name contains
+    `<`, `&` or HTML-like markup (e.g. from a compromised drivers.yaml).
+    """
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=False)
 
 
 # =============================================================================
@@ -35,6 +47,9 @@ class TelegramBot:
         self._callbacks: Dict[str, Callable] = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        # Optional whitelist check — set by NotificationManager to block unknown senders.
+        # Returns True if the chat_id may send commands/callbacks to this bot.
+        self.authorize: Optional[Callable[[int], bool]] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -104,7 +119,12 @@ class TelegramBot:
             data = cb.get("data", "")
             chat_id = cb["message"]["chat"]["id"]
             self._api("answerCallbackQuery", {"callback_query_id": cb["id"]})
+            if self.authorize is not None and not self.authorize(chat_id):
+                log("warning", f"Telegram: rejected callback from unauthorized chat {chat_id}")
+                return
             for prefix, handler in self._callbacks.items():
+                if prefix == "text_handler":
+                    continue  # text handler is not a callback-data prefix
                 if data.startswith(prefix):
                     try:
                         handler(chat_id, data)
@@ -117,6 +137,9 @@ class TelegramBot:
             msg = update["message"]
             chat_id = msg["chat"]["id"]
             text = msg["text"].strip()
+            if self.authorize is not None and not self.authorize(chat_id):
+                log("warning", f"Telegram: rejected text from unauthorized chat {chat_id}")
+                return
             if "text_handler" in self._callbacks:
                 try:
                     self._callbacks["text_handler"](chat_id, text)
@@ -207,6 +230,11 @@ class NotificationManager:
         bot.register_callback("depart_", self._handle_departure_callback)
         bot.register_callback("text_handler", self._handle_text_message)
 
+        # Security: only accept messages from chat_ids configured in drivers.yaml.
+        # Closes the remote-control hole where anyone who knows the bot name could
+        # boost-charge another driver's vehicle.
+        bot.authorize = lambda cid: self.drivers.get_driver_by_chat_id(cid) is not None
+
     # ------------------------------------------------------------------
     # Outgoing notifications
     # ------------------------------------------------------------------
@@ -245,8 +273,8 @@ class NotificationManager:
         ]
 
         msg = (
-            f"⚡ <b>{vehicle_name}</b> ({current_soc:.0f}%)\n"
-            f"{reason}\n\n"
+            f"⚡ <b>{_esc(vehicle_name)}</b> ({current_soc:.0f}%)\n"
+            f"{_esc(reason)}\n\n"
             f"Auf wieviel % laden?"
         )
 
@@ -269,7 +297,7 @@ class NotificationManager:
             return
         self.bot.send_message(
             driver.telegram_chat_id,
-            f"✅ <b>{vehicle_name}</b> Ladung fertig ({final_soc:.0f}%)",
+            f"✅ <b>{_esc(vehicle_name)}</b> Ladung fertig ({final_soc:.0f}%)",
         )
 
     def send_switch_request(self, done_vehicle: str, next_vehicle: str, reason: str):
@@ -279,7 +307,7 @@ class NotificationManager:
             return
         self.bot.send_message(
             driver.telegram_chat_id,
-            f"🔄 {done_vehicle} fertig. Bitte <b>{next_vehicle}</b> anstecken.\n{reason}",
+            f"🔄 {_esc(done_vehicle)} fertig. Bitte <b>{_esc(next_vehicle)}</b> anstecken.\n{_esc(reason)}",
         )
 
     def send_departure_inquiry(self, vehicle_name: str, current_soc: float) -> bool:
@@ -350,7 +378,7 @@ class NotificationManager:
         log("info", f"Telegram: {vehicle} → target SoC {target_soc}%")
         self.bot.send_message(
             chat_id,
-            f"✅ {vehicle} wird auf <b>{target_soc}%</b> geladen.\n"
+            f"✅ {_esc(vehicle)} wird auf <b>{target_soc}%</b> geladen.\n"
             f"Bitte sicherstellen dass das Fahrzeug angesteckt ist.",
         )
         self.pending_inquiries.pop(vehicle, None)
@@ -418,7 +446,7 @@ class NotificationManager:
             from override_manager import OVERRIDE_DURATION_MINUTES
             self.bot.send_message(
                 chat_id,
-                f"Boost Charge für <b>{vehicle_name}</b> aktiviert! "
+                f"Boost Charge für <b>{_esc(vehicle_name)}</b> aktiviert! "
                 f"Läuft {OVERRIDE_DURATION_MINUTES} Minuten.",
             )
         elif result.get("quiet_hours_blocked"):
@@ -457,7 +485,7 @@ class NotificationManager:
                 self._pending_departure_vehicle = None
                 self.bot.send_message(
                     chat_id,
-                    f"Alles klar! {vehicle_name} wird bis {local_departure.strftime('%H:%M')} fertig sein.",
+                    f"Alles klar! {_esc(vehicle_name)} wird bis {local_departure.strftime('%H:%M')} fertig sein.",
                 )
                 log("info", f"Telegram: departure set via free text for {vehicle_name} -> {departure.isoformat()}")
                 return
@@ -509,7 +537,7 @@ class NotificationManager:
             from override_manager import OVERRIDE_DURATION_MINUTES
             self.bot.send_message(
                 chat_id,
-                f"Boost Charge für <b>{vehicle_name}</b> aktiviert! "
+                f"Boost Charge für <b>{_esc(vehicle_name)}</b> aktiviert! "
                 f"Läuft {OVERRIDE_DURATION_MINUTES} Minuten.",
             )
         elif result.get("quiet_hours_blocked"):

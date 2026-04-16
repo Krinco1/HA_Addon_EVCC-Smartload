@@ -167,9 +167,9 @@ def log_main_cycle(
             )
         requests = sequencer.get_requests_summary()
         if requests:
-            for v_name, req in requests.items():
+            for req in requests:
                 dlog.sequencer(
-                    f"{v_name}: {req['need_kwh']}kWh → {req['target_soc']}% ({req['status']})",
+                    f"{req['vehicle']}: {req['need_kwh']}kWh → {req['target_soc']}% ({req['status']})",
                     source="sequencer",
                 )
         now = datetime.now(timezone.utc)

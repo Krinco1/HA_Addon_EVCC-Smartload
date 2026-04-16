@@ -25,6 +25,10 @@ from state import PlanHorizon, SystemState
 # Threshold in minutes for "evcc unreachable" dashboard warning
 _UNREACHABLE_WARN_MINUTES = 30
 
+# evcc REST API uses 1-based loadpoint IDs for POST /api/loadpoints/{id}/...
+# Sequencer, OverrideManager and ModeController must agree on the same ID.
+LOADPOINT_ID = 1
+
 
 class EvccModeController:
     """Controls evcc loadpoint mode and detects manual overrides."""
@@ -224,7 +228,7 @@ class EvccModeController:
         if target_mode == current_mode:
             return
 
-        success = self.evcc.set_loadpoint_mode(0, target_mode)
+        success = self.evcc.set_loadpoint_mode(LOADPOINT_ID, target_mode)
         if success:
             self._last_set_mode = target_mode
             log("info", f"EvccModeController: mode {current_mode} -> {target_mode}")

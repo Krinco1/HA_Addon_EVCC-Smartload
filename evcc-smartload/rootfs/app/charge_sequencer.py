@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Tuple
 from config import Config
 from evcc_client import EvccClient
 from logging_util import log
+from time_util import local_hour, to_local
 
 
 # =============================================================================
@@ -272,9 +273,19 @@ class ChargeSequencer:
         current_hour = now.replace(minute=0, second=0, microsecond=0)
 
         for i, req in enumerate(ranked):
+            # Respect the driver's departure deadline — planning a cheap slot
+            # AFTER the car leaves is useless.
+            departure_dt = None
+            if self.departure_store is not None:
+                try:
+                    departure_dt = self.departure_store.get(req.vehicle_name)
+                except Exception:
+                    departure_dt = None
+
             available = [
                 (h, p) for h, p in hourly_prices
                 if h not in used_hours
+                and (departure_dt is None or h < departure_dt)
             ]
             if not available:
                 break
@@ -368,7 +379,9 @@ class ChargeSequencer:
     def _is_quiet(self, dt: datetime) -> bool:
         if not self.quiet.enabled:
             return False
-        h = dt.hour
+        # Quiet hours are configured in local time (e.g. 21-06 means 21:00 local).
+        # Container usually runs UTC — convert before comparing.
+        h = local_hour(dt)
         s, e = self.quiet.start_hour, self.quiet.end_hour
         if s > e:
             return h >= s or h < e
@@ -378,10 +391,14 @@ class ChargeSequencer:
         """Up to 90 min before quiet hours: recommend which EV to plug in."""
         if not self.quiet.enabled:
             return None
-        quiet_start = now.replace(hour=self.quiet.start_hour, minute=0, second=0, microsecond=0)
-        if now >= quiet_start:
+        # Quiet-hours start is local → compute the next local quiet_start from `now`
+        local_now = to_local(now)
+        quiet_start_local = local_now.replace(
+            hour=self.quiet.start_hour, minute=0, second=0, microsecond=0
+        )
+        if local_now >= quiet_start_local:
             return None
-        minutes_until = (quiet_start - now).total_seconds() / 60
+        minutes_until = (quiet_start_local - local_now).total_seconds() / 60
         if minutes_until > 90 or minutes_until < 0:
             return None
 

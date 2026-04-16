@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Tuple
 from config import Config
 from logging_util import log
 from state import Action, SystemState
+from time_util import local_now
 
 
 @dataclass
@@ -234,7 +235,8 @@ class HolisticOptimizer:
             return "pv_only"
 
         # Season-aware: low solar months → be more aggressive
-        month = datetime.now().month
+        # Use local month so DACH users get "winter" set correctly near year boundaries.
+        month = local_now().month
         winter = month in (11, 12, 1, 2, 3)
 
         if winter:

@@ -394,7 +394,9 @@ class Comparator:
 
     def save(self):
         try:
-            with open(COMPARISON_LOG_PATH, "w") as f:
+            import os as _os
+            tmp_path = f"{COMPARISON_LOG_PATH}.tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(
                     {
                         "version": 2,
@@ -411,6 +413,7 @@ class Comparator:
                     },
                     f,
                 )
+            _os.replace(tmp_path, COMPARISON_LOG_PATH)
         except Exception:
             pass
 

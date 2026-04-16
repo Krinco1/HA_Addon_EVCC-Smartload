@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from logging_util import log
+from time_util import local_hour
 
 
 OVERRIDE_DURATION_MINUTES = 90
@@ -192,7 +193,9 @@ class OverrideManager:
         if not getattr(self.cfg, "quiet_hours_enabled", False):
             return False
 
-        h = now.hour
+        # `now` is usually datetime.now() in container-local TZ (UTC).
+        # Quiet-hour boundaries are configured as local wall-clock hours → convert.
+        h = local_hour(now)
         s = self.cfg.quiet_hours_start
         e = self.cfg.quiet_hours_end
 

@@ -213,8 +213,10 @@ class DepartureTimeStore:
             dir_path = os.path.dirname(self._persist_path)
             if dir_path:
                 os.makedirs(dir_path, exist_ok=True)
-            with open(self._persist_path, "w", encoding="utf-8") as f:
+            tmp_path = f"{self._persist_path}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self._times, f, indent=2)
+            os.replace(tmp_path, self._persist_path)
         except Exception as e:
             log("warning", f"DepartureStore: could not save to {self._persist_path}: {e}")
 

@@ -281,6 +281,13 @@ def main():
 
     # --- Main decision loop ---
     last_state: Optional[SystemState] = None
+    # RL learning needs the action taken at cycle N-1 to score the transition
+    # from last_state (N-1) to state (N). Keeping these as separate "last_*"
+    # variables (rather than using the current-cycle _rl_action_idx) fixes the
+    # off-by-one-cycle bug where Q-values were updated for the wrong action.
+    last_rl_action_idx: int = 0
+    last_rl_bat_delta_ct: float = 0.0
+    last_rl_ev_delta_ct: float = 0.0
     learning_steps = 0
     # Phase 7 Plan 02: plug-in detection state
     last_ev_connected = False
@@ -327,14 +334,36 @@ def main():
                     - state.price_percentiles.get(20, 0)
                 )
                 now_utc = datetime.now(timezone.utc)
-                state.hours_cheap_remaining = sum(
-                    1 for t in tariffs
-                    if float(t.get("value", 1)) <= state.price_percentiles.get(30, 0.20)
-                )
+                # hours_cheap_remaining: sum slot durations (hours) below P30,
+                # not raw slot count — with 15-min spot markets a count would be 4x off.
+                p30 = state.price_percentiles.get(30, 0.20)
+                cheap_seconds = 0.0
+                for t in tariffs:
+                    try:
+                        v = float(t.get("value", 1))
+                    except (TypeError, ValueError):
+                        continue
+                    if v > p30:
+                        continue
+                    start_raw = t.get("start")
+                    end_raw = t.get("end")
+                    try:
+                        s_dt = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+                        e_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+                        cheap_seconds += max(0.0, (e_dt - s_dt).total_seconds())
+                    except Exception:
+                        cheap_seconds += 3600.0  # fallback: assume hourly slot
+                state.hours_cheap_remaining = int(round(cheap_seconds / 3600))
                 solar_today = filter_today_solar(solar_forecast)
+                # Unit detection: take the peak value (not index 0 which is pre-sunrise).
+                peak_val = max(
+                    (float(t.get("value", 0) or 0) for t in solar_today),
+                    default=0.0,
+                )
+                scale = 0.001 if peak_val > 100 else 1.0  # W→kW
                 state.solar_forecast_total_kwh = sum(
-                    max(0, float(t.get("value", 0))) for t in solar_today
-                ) * (0.001 if solar_today and float(solar_today[0].get("value", 0)) > 100 else 1.0)
+                    max(0, float(t.get("value", 0) or 0)) for t in solar_today
+                ) * scale
 
             # Dynamic RL device registration
             for vname in vehicle_monitor.get_all_vehicles():
@@ -361,12 +390,39 @@ def main():
 
             # PVForecaster: update correction coefficient every cycle
             if state and state.pv_power is not None:
-                pv_kw = state.pv_power / 1000.0 if state.pv_power > 100 else state.pv_power
+                # state.pv_power is always Watt → divide by 1000 unconditionally
+                pv_kw = state.pv_power / 1000.0
                 pv_forecaster.update_correction(pv_kw, datetime.now(timezone.utc))
 
             # Collect forecast data for StateStore
             consumption_96 = consumption_forecaster.get_forecast_24h() if consumption_forecaster.is_ready else None
             pv_96 = pv_forecaster.get_forecast_24h()
+
+            # --- Feed RL state features 13-24 (price_forecast / pv_forecast) ---
+            # Without this, to_vector() fills these 12 dimensions with zeros.
+            # price_forecast: next 6 hourly prices in EUR/kWh.
+            if tariffs:
+                try:
+                    state.price_forecast = [
+                        float(t.get("value", 0.0) or 0.0)
+                        for t in tariffs[:6]
+                    ]
+                except Exception:
+                    state.price_forecast = []
+            # pv_forecast: next 6 hours averaged from 96-slot 15-min array, in Watts
+            # (to match normalisation `p / 10000` in SystemState.to_vector()).
+            if pv_96 and len(pv_96) >= 4:
+                try:
+                    hourly_kw = []
+                    for h in range(6):
+                        start = h * 4
+                        chunk = pv_96[start:start + 4]
+                        if not chunk:
+                            break
+                        hourly_kw.append(sum(chunk) / len(chunk))
+                    state.pv_forecast = [kw * 1000.0 for kw in hourly_kw]
+                except Exception:
+                    state.pv_forecast = []
 
             events = event_detector.detect(state)
 
@@ -374,24 +430,23 @@ def main():
             # Update per-source rolling MAE before planner so confidence factors
             # are fresh for this cycle's LP call.
             if forecast_reliability is not None:
-                current_slot_idx = _current_slot_index()
+                # Forecasters return 96 slots anchored at "now" (slot 0 = current 15-min window)
+                # → compare actual readings to forecast[0], not to an absolute-day index.
 
                 # PV reliability: convert W -> kW (Pitfall 4 from research)
-                if pv_96 is not None and state.pv_power is not None:
+                if pv_96 is not None and state.pv_power is not None and len(pv_96) > 0:
                     actual_pv_kw = state.pv_power / 1000.0
-                    if 0 <= current_slot_idx < len(pv_96):
-                        try:
-                            forecast_reliability.update("pv", actual=actual_pv_kw, forecast=pv_96[current_slot_idx])
-                        except Exception as e:
-                            log("debug", f"ForecastReliabilityTracker.update(pv) error: {e}")
+                    try:
+                        forecast_reliability.update("pv", actual=actual_pv_kw, forecast=pv_96[0])
+                    except Exception as e:
+                        log("debug", f"ForecastReliabilityTracker.update(pv) error: {e}")
 
                 # Consumption reliability
-                if consumption_96 is not None and state.home_power is not None:
-                    if 0 <= current_slot_idx < len(consumption_96):
-                        try:
-                            forecast_reliability.update("consumption", actual=state.home_power, forecast=consumption_96[current_slot_idx])
-                        except Exception as e:
-                            log("debug", f"ForecastReliabilityTracker.update(consumption) error: {e}")
+                if consumption_96 is not None and state.home_power is not None and len(consumption_96) > 0:
+                    try:
+                        forecast_reliability.update("consumption", actual=state.home_power, forecast=consumption_96[0])
+                    except Exception as e:
+                        log("debug", f"ForecastReliabilityTracker.update(consumption) error: {e}")
 
                 # Price reliability
                 if tariffs and state.current_price is not None:
@@ -584,16 +639,9 @@ def main():
                     source="system",
                 )
 
-            # --- Phase 12: LP-Gated Battery-to-EV Arbitrage ---
-            all_vehicles = vehicle_monitor.get_all_vehicles()
-            any_ev_connected = any(v.connected_to_wallbox for v in all_vehicles.values())
-            _arb_status = run_battery_arbitrage(
-                cfg, state, controller, all_vehicles, tariffs, solar_forecast,
-                any_ev_connected, plan=plan, mode_status=_mode_status,
-                buffer_calc=buffer_calc,
-            )
-
             # --- Phase 5: Dynamic Buffer ---
+            # Run buffer BEFORE battery arbitrage so arbitrage sees a fresh buffer
+            # state (old order had arbitrage reading stale data from the previous cycle).
             buffer_result = None
             if buffer_calc is not None and not controller._bat_to_ev_active:
                 try:
@@ -607,6 +655,15 @@ def main():
                 except Exception as e:
                     log("warning", f"DynamicBufferCalc: step failed ({e})")
 
+            # --- Phase 12: LP-Gated Battery-to-EV Arbitrage ---
+            all_vehicles = vehicle_monitor.get_all_vehicles()
+            any_ev_connected = any(v.connected_to_wallbox for v in all_vehicles.values())
+            _arb_status = run_battery_arbitrage(
+                cfg, state, controller, all_vehicles, tariffs, solar_forecast,
+                any_ev_connected, plan=plan, mode_status=_mode_status,
+                buffer_calc=buffer_calc,
+            )
+
             # --- v5: Charge Sequencer ---
             now = datetime.now(timezone.utc)
             if sequencer is not None:
@@ -619,7 +676,11 @@ def main():
                     (n for n, v in all_vehicles.items() if v.connected_to_wallbox), None
                 )
                 sequencer.plan(tariffs, solar_forecast, connected_vehicle, now)
-                sequencer.apply_to_evcc(now)
+                # Skip apply when a Boost override is active — otherwise sequencer
+                # would overwrite the override's "now" mode with its own schedule
+                # (or switch LP off between slots), cancelling the Boost immediately.
+                if not _override_active:
+                    sequencer.apply_to_evcc(now)
 
                 # Quiet-hours plug reminder via Telegram
                 if notifier:
@@ -700,19 +761,21 @@ def main():
                     log("debug", f"ReactionTimingTracker.update error: {e}")
 
             # --- Phase 8: Comparator residual update (uses shared slot-0 costs) ---
+            # Deltas belong to the PREVIOUS cycle's action (it caused this cycle's outcome).
             if comparator is not None and rl_agent is not None and not override_active:
                 if plan_slot0_cost is not None and actual_slot0_cost is not None:
                     try:
-                        comparator.compare_residual(plan_slot0_cost, actual_slot0_cost, _rl_bat_delta_ct, _rl_ev_delta_ct)
+                        comparator.compare_residual(plan_slot0_cost, actual_slot0_cost, last_rl_bat_delta_ct, last_rl_ev_delta_ct)
                     except Exception as e:
                         log("debug", f"Comparator.compare_residual error: {e}")
 
             # --- Phase 8: RL learning step (uses shared slot-0 costs) ---
+            # Use last_rl_action_idx (chosen at cycle N-1), not _rl_action_idx (chosen this cycle).
             if rl_agent is not None and not override_active:
                 if plan_slot0_cost is not None and actual_slot0_cost is not None and last_state is not None:
                     try:
                         reward = rl_agent.calculate_reward(plan_slot0_cost, actual_slot0_cost)
-                        rl_agent.learn_from_correction(last_state, _rl_action_idx, reward, state)
+                        rl_agent.learn_from_correction(last_state, last_rl_action_idx, reward, state)
                         learning_steps += 1
                         if learning_steps % 50 == 0:
                             log("info", f"RL: {learning_steps} correction steps, ε={rl_agent.epsilon:.3f}")
@@ -737,6 +800,10 @@ def main():
                         log("debug", f"RL auto-promotion check error: {e}")
 
             last_state = state
+            # Persist this cycle's RL action for the NEXT cycle's learning step.
+            last_rl_action_idx = _rl_action_idx
+            last_rl_bat_delta_ct = _rl_bat_delta_ct
+            last_rl_ev_delta_ct = _rl_ev_delta_ct
 
             # --- Logging ---
             p20 = state.price_percentiles.get(20, 0) * 100

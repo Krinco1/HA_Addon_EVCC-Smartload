@@ -298,6 +298,7 @@ class DataCollector:
         ev_name = None
         ev_soc = 0.0
         ev_cap = 0.0
+        ev_power_w = 0.0
         ev_connected = False
 
         loadpoints = site.get("loadpoints", [])
@@ -306,6 +307,11 @@ class DataCollector:
                 ev_name = lp.get("vehicleName") or lp.get("vehicle")
                 ev_soc = float(lp.get("vehicleSoc", 0) or 0)
                 ev_connected = True
+                # chargePower from evcc is in Watts — fall back to 0 if absent
+                try:
+                    ev_power_w = float(lp.get("chargePower", 0) or 0)
+                except (TypeError, ValueError):
+                    ev_power_w = 0.0
                 # Try to get capacity from our vehicle data
                 vehicles = self.vehicle_monitor.get_all_vehicles()
                 for vname, vdata in vehicles.items():
@@ -327,7 +333,7 @@ class DataCollector:
             ev_connected=ev_connected,
             ev_name=ev_name,
             ev_soc=float(ev_soc),
-            ev_power=0.0,
+            ev_power=float(ev_power_w),
             ev_capacity_kwh=float(ev_cap),
         )
 
