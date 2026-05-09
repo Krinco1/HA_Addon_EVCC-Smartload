@@ -2,6 +2,81 @@
 
 ---
 
+## v6.6.0 — Bootstrap-Refactor + Renault-Hardening + Component-Health (2026-05-09)
+
+Drei strukturelle Verbesserungen, +11 neue Regressionstests.
+
+### main.py → bootstrap.py extract
+
+- ~250 Zeilen Init-Logik aus `main.py` herausgezogen in neues
+  `bootstrap.py` Modul (`Components` dataclass + `bootstrap()` function).
+- `main.py` 1087 → 933 LoC. Init ist jetzt isoliert und unit-testbar.
+- `wire_web()` kapselt die 18 late-bound WebServer-Attribut-Zuweisungen
+  in einer einzigen Funktion.
+- Decision-Loop bleibt unverändert — variable bindings am Ende der
+  Init-Phase machen den Loop-Body identisch zu v6.5.0. Loop-Refactor
+  folgt in v6.7.0.
+
+### Component-Health Backend (SLF-015 / CC-3)
+
+Acht optionale Subsysteme (HorizonPlanner, DynamicBufferCalc,
+ResidualRLAgent, SeasonalLearner, ForecastReliabilityTracker,
+ReactionTimingTracker, OverrideManager, DepartureTimeStore,
+EvccModeController) wurden bisher mit `try/except: log; var=None`
+gewickelt — Init-Fehler waren nur im Log sichtbar, das Dashboard zeigte
+"alles ok". Jetzt:
+
+- Bootstrap trackt jeden Component-Init als `ComponentHealth(name,
+  status, detail)` mit `status ∈ {"ok", "failed", "disabled"}`.
+- Beim Start: zusammenfassende Health-Zeile im Log
+  (`Component health: 12 ok, 1 failed, 1 disabled`) plus Detail-Lines
+  für jeden failed-Eintrag.
+- `/health` Endpoint liefert jetzt `{status, version, components: [...],
+  components_failed_count}`. `status: "degraded"` wenn ≥1 Component
+  failed ist.
+- `/status` Endpoint enthält `component_health` und
+  `components_failed_count` Felder.
+- Dashboard-Banner ist v6.7.0 Follow-up.
+
+### Renault Provider Hardening
+
+- **Backoff-Overflow-Guard:** `_failure_count` wird vor dem `2**n`-Shift
+  geclampt (CR/audit Pitfall). Nach 1000 fehlgeschlagenen Polls landen
+  wir nicht mehr in 2**1000 Sekunden Future.
+- **Auth-Error-Detection robust:** Strukturierte Felder zuerst
+  (`exc.status`, `exc.status_code`, `exc.error_details[].errorCode` —
+  Kamereon-Codes `err.func.401`, `err.tech.401`, `err.func.403`).
+  String-Match (`'401' in str(e)`) nur als letzter Fallback.
+  Verhindert false-positives wo "401" in einer normalen Fehlermeldung
+  vorkommt.
+- **`lastEnergyDate` Awareness:** Renault-Cloud liefert die letzte
+  *cloud-bekannte* SoC, nicht eine Echtzeitmessung. Bei einem 3 Tage
+  geparkten Auto returnte SmartLoad bisher veraltete Daten als
+  "frisch". Neue `_renault_timestamp(battery)` Funktion zieht
+  `battery.timestamp` und überschreibt `vd.last_update` damit.
+  Stale-Detection (`is_data_stale`) sieht jetzt das echte
+  Messdatum.
+
+### Shutdown-Hook
+
+- `atexit`-Handler in main.py ruft `provider.close()` auf allen
+  Vehicle-Providern, die einen haben (Renault). Verhindert die
+  "Unclosed client session" Warnings beim Container-Stop.
+
+### Tests
+
+- `+11` neue Tests in `test_v6_6_0_regressions.py`. **141/141 grün.**
+
+### Verbleibend für v6.7.0 / v2.0
+
+- main.py Decision-Loop → `decision_loop.py` extract (löst die letzten
+  600 LoC aus main.py raus)
+- web/server.py 1305 LoC Route-Registry-Refactor
+- Component-Health Dashboard-Banner (Frontend-Teil)
+- Multi-LP-Strategie-Entscheidung (SLF-017)
+
+---
+
 ## v6.5.0 — Strukturelle Cleanups & ehrliche Metriken (2026-05-09)
 
 Vier strukturelle Refactors, +16 neue Regressionstests, retrospektives Replay-Tool.

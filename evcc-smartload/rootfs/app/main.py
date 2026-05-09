@@ -24,30 +24,16 @@ from version import VERSION
 from logging_util import log
 from config import load_config
 from config_validator import ConfigValidator
-from evcc_client import EvccClient
-from influxdb_client import InfluxDBClient
-from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh, compute_price_percentiles, filter_today_solar
+from state import Action, SystemState, calc_solar_surplus_kwh, compute_price_percentiles, filter_today_solar
 from state_store import StateStore
-from forecaster import ConsumptionForecaster, PVForecaster
-from forecaster.ha_energy import run_entity_discovery
-from decision_log import DecisionLog, log_main_cycle
-from optimizer import HolisticOptimizer, EventDetector
-from optimizer.planner import HorizonPlanner
-from rl_agent import ResidualRLAgent
-from seasonal_learner import SeasonalLearner
-from forecast_reliability import ForecastReliabilityTracker
-from reaction_timing import ReactionTimingTracker
-from comparator import Comparator, RLDeviceController
-from controller import Controller
-from vehicle_monitor import DataCollector, VehicleMonitor
-from charge_sequencer import ChargeSequencer
-from driver_manager import DriverManager
+from decision_log import log_main_cycle
 from web import WebServer
-from plan_snapshotter import PlanSnapshotter
-from override_manager import OverrideManager
-from departure_store import DepartureTimeStore
-from evcc_mode_controller import EvccModeController
 from battery_arbitrage import run_battery_arbitrage
+from bootstrap import bootstrap, apply_validation_defaults, wire_web
+
+# Re-exports kept so the loop-side code below can use the same names without
+# refactoring the loop in this PR. The actual init lives in bootstrap.py.
+from rl_agent import DELTA_OPTIONS_CT, N_EV_DELTAS  # used in RL action-index math
 
 
 def main():
@@ -71,26 +57,14 @@ def main():
         if e.suggestion:
             log(level, f"  -> {e.suggestion}")
 
-    # Apply safe defaults for non-critical warnings before starting I/O
-    for e in config_errors:
-        if e.severity == "warning":
-            if e.field == "battery_max_price_ct":
-                log("warning", f"Setze battery_max_price_ct auf 25.0ct (war: {cfg.battery_max_price_ct})")
-                cfg.battery_max_price_ct = 25.0
-            elif e.field == "ev_max_price_ct":
-                log("warning", f"Setze ev_max_price_ct auf 30.0ct (war: {cfg.ev_max_price_ct})")
-                cfg.ev_max_price_ct = 30.0
-            elif e.field == "decision_interval_minutes":
-                log("warning", f"Setze decision_interval_minutes auf 15 (war: {cfg.decision_interval_minutes})")
-                cfg.decision_interval_minutes = 15
+    apply_validation_defaults(cfg, config_errors)
 
     # --- v6: StateStore — single source of truth for shared state ---
     store = StateStore()
 
-    # --- v6.1: Start WebServer early so error page is reachable even on critical errors ---
-    # WebServer is created with config_errors and started before any I/O objects are built.
-    # If critical errors exist, we block here; the web server stays alive serving the error page.
-    # If no critical errors, we populate the remaining attributes below before the main loop.
+    # --- v6.1: Start WebServer early so the error page is reachable even on
+    # critical config errors. If critical errors exist we block here; the web
+    # server stays alive serving the error page.
     web = WebServer(cfg, store, config_errors=config_errors)
     web.start()
 
@@ -100,191 +74,57 @@ def main():
         while True:
             time.sleep(60)
 
-    # --- Core infrastructure (only reached if no critical config errors) ---
-    evcc = EvccClient(cfg)
-    influx = InfluxDBClient(cfg)
-    plan_snapshotter = PlanSnapshotter(influx)
-    manual_store = ManualSocStore()
+    # --- v6.6.0: All component init lives in bootstrap.py ---
+    comp = bootstrap(cfg)
+    wire_web(comp, web)
+    _install_shutdown_hook(comp)
 
-    # --- v7: Forecasters (Phase 3) ---
-    consumption_forecaster = ConsumptionForecaster(influx, cfg)
-    pv_forecaster = PVForecaster(evcc)
-
-    # HA entity discovery in daemon thread (non-blocking, per Research Pitfall 3)
-    ha_discovery_result = {"status": "pending"}
-    if getattr(cfg, "ha_url", None) and getattr(cfg, "ha_token", None):
-        def _ha_discover():
-            ha_discovery_result.update(run_entity_discovery(cfg.ha_url, cfg.ha_token))
-        threading.Thread(target=_ha_discover, daemon=True).start()
-
-    # Initial PV forecast fetch before loop starts
-    pv_forecaster.refresh()
-    _last_pv_refresh = time.time()
-
-    # --- Energy management ---
-    vehicle_monitor = VehicleMonitor(evcc, cfg, manual_store)
-    collector = DataCollector(evcc, influx, cfg, vehicle_monitor)
-    optimizer = HolisticOptimizer(cfg)
-
-    # --- Phase 4: HorizonPlanner (LP-based, graceful fallback if scipy unavailable) ---
-    horizon_planner = None
-    try:
-        horizon_planner = HorizonPlanner(cfg)
-        log("info", "HorizonPlanner: initialized (scipy/HiGHS LP solver)")
-    except ImportError as e:
-        log("warning", f"HorizonPlanner: scipy not available ({e}), using HolisticOptimizer only")
-    except Exception as e:
-        log("warning", f"HorizonPlanner: init failed ({e}), using HolisticOptimizer only")
-
-    # --- Phase 5: DynamicBufferCalc (situational battery min SoC) ---
-    buffer_calc = None
-    try:
-        from dynamic_buffer import DynamicBufferCalc
-        buffer_calc = DynamicBufferCalc(cfg, evcc)
-        log("info", "DynamicBufferCalc: initialized")
-    except Exception as e:
-        log("warning", f"DynamicBufferCalc: init failed ({e}), buffer management disabled")
-
-    # --- Phase 8: ResidualRLAgent (replaces DQNAgent) ---
-    rl_agent = None
-    try:
-        rl_agent = ResidualRLAgent(cfg)
-        log("info", f"ResidualRLAgent: initialized (mode={rl_agent.mode})")
-    except Exception as e:
-        log("warning", f"ResidualRLAgent: init failed ({e}), RL corrections disabled")
-
-    event_detector = EventDetector()
-    comparator = Comparator(cfg)
-    controller = Controller(evcc, cfg)
-    rl_devices = RLDeviceController(cfg)
-
-    # --- Phase 8: Learning subsystems ---
-    seasonal_learner = None
-    try:
-        seasonal_learner = SeasonalLearner()
-        log("info", f"SeasonalLearner: {seasonal_learner.populated_cell_count()} cells populated")
-    except Exception as e:
-        log("warning", f"SeasonalLearner init failed: {e}")
-
-    forecast_reliability = None
-    try:
-        forecast_reliability = ForecastReliabilityTracker()
-        log("info", "ForecastReliabilityTracker initialized")
-    except Exception as e:
-        log("warning", f"ForecastReliabilityTracker init failed: {e}")
-
-    reaction_timing = None
-    try:
-        reaction_timing = ReactionTimingTracker()
-        log("info", "ReactionTimingTracker initialized")
-    except Exception as e:
-        log("warning", f"ReactionTimingTracker init failed: {e}")
-
-    # --- v5: EV charge sequencer ---
-    sequencer = ChargeSequencer(cfg, evcc) if cfg.sequencer_enabled else None
-
-    # --- v5: Driver manager + Telegram (optional) ---
-    driver_mgr = DriverManager()
-    telegram_bot = None
-    notifier = None
-
-    if driver_mgr.telegram_enabled:
-        try:
-            from notification import TelegramBot, NotificationManager
-            telegram_bot = TelegramBot(driver_mgr.telegram_bot_token)
-            notifier = NotificationManager(
-                bot=telegram_bot,
-                driver_manager=driver_mgr,
-                on_soc_response=lambda vehicle, soc, chat_id:
-                    _handle_soc_response(sequencer, vehicle_monitor, vehicle, soc),
-            )
-            telegram_bot.start_polling()
-            log("info", f"Telegram Bot aktiv für {len(driver_mgr.drivers)} Fahrer")
-        except Exception as e:
-            log("error", f"Telegram setup failed: {e}")
-            notifier = None
-
-    # --- Phase 7: Override Manager (Boost Charge) ---
-    override_manager = None
-    try:
-        override_manager = OverrideManager(cfg, evcc, notifier)
-        log("info", "OverrideManager: initialized")
-    except Exception as e:
-        log("warning", f"OverrideManager: init failed ({e}), boost-charge disabled")
-
-    # Inject override_manager into notifier for Telegram command handling
-    if notifier is not None and override_manager is not None:
-        notifier.override_manager = override_manager
-
-    # --- Phase 7 Plan 02: DepartureTimeStore (proactive departure queries) ---
-    departure_store = None
-    try:
-        departure_store = DepartureTimeStore(default_hour=cfg.ev_charge_deadline_hour)
-        log("info", "DepartureTimeStore: initialized")
-    except Exception as e:
-        log("warning", f"DepartureTimeStore: init failed ({e}), departure queries disabled")
-
-    # Inject departure_store into notifier, web server, and sequencer
-    if notifier is not None and departure_store is not None:
-        notifier.departure_store = departure_store
-    web.departure_store = departure_store
-    # Phase 7 Plan 03: urgency scoring needs departure times
-    if sequencer is not None and departure_store is not None:
-        sequencer.departure_store = departure_store
-
-    # --- Phase 11: evcc Mode Controller (mode selection + override detection) ---
-    mode_controller = None
-    try:
-        mode_controller = EvccModeController(evcc, cfg)
-        log("info", "EvccModeController: initialized")
-    except Exception as e:
-        log("warning", f"EvccModeController: init failed ({e}), mode control disabled")
-
-    # v6.5.0: hand mode-write ownership to ModeController so Sequencer's
-    # mode writes (which would otherwise be misread as user overrides) are
-    # suppressed. Sequencer falls back to writing modes only when
-    # ModeController is unavailable.
-    if mode_controller is not None and sequencer is not None:
-        sequencer.mode_writes_owned_externally = True
-
-    # --- Register all known devices for RL tracking ---
-    rl_devices.get_device_mode("battery")
-    for vp in cfg.vehicle_providers:
-        vname = vp.get("evcc_name") or vp.get("name", "")
-        if vname:
-            rl_devices.get_device_mode(vname)
-    rl_devices.dedup_case_duplicates()
+    # Local aliases — keeps the decision-loop body below identical to v6.5.0
+    # without rewriting every reference. A future refactor will fold the loop
+    # into Components methods and drop these.
+    evcc = comp.evcc
+    influx = comp.influx
+    plan_snapshotter = comp.plan_snapshotter
+    manual_store = comp.manual_store
+    consumption_forecaster = comp.consumption_forecaster
+    pv_forecaster = comp.pv_forecaster
+    vehicle_monitor = comp.vehicle_monitor
+    collector = comp.collector
+    optimizer = comp.optimizer
+    horizon_planner = comp.horizon_planner
+    buffer_calc = comp.buffer_calc
+    rl_agent = comp.rl_agent
+    event_detector = comp.event_detector
+    comparator = comp.comparator
+    controller = comp.controller
+    rl_devices = comp.rl_devices
+    seasonal_learner = comp.seasonal_learner
+    forecast_reliability = comp.forecast_reliability
+    reaction_timing = comp.reaction_timing
+    sequencer = comp.sequencer
+    driver_mgr = comp.driver_mgr
+    telegram_bot = comp.telegram_bot
+    notifier = comp.notifier
+    override_manager = comp.override_manager
+    departure_store = comp.departure_store
+    mode_controller = comp.mode_controller
+    decision_log = comp.decision_log
+    ha_discovery_result = comp.ha_discovery_result
+    _last_pv_refresh = comp.last_pv_refresh
 
     # --- Start background services ---
     collector.start_background_collection()
     vehicle_monitor.start_polling()
 
-    decision_log = DecisionLog(max_entries=100)
-
-    # --- v6: Populate WebServer with all components (server already started above) ---
-    # The server was started early to serve the error page; now we attach all components
-    # so API handlers have access to the optimizer, RL agent, comparator, etc.
-    web.lp = optimizer
-    web.rl = rl_agent
-    web.comparator = comparator
-    web.events = event_detector
-    web.collector = collector
-    web.vehicle_monitor = vehicle_monitor
-    web.rl_devices = rl_devices
-    web.manual_store = manual_store
-    web.decision_log = decision_log
-    web.sequencer = sequencer
-    web.driver_mgr = driver_mgr
-    web.notifier = notifier
-    web.buffer_calc = buffer_calc
-    web.plan_snapshotter = plan_snapshotter
-    web.override_manager = override_manager
-    # Phase 8: Learning subsystems (late attribute assignment, consistent with other components)
-    web.seasonal_learner = seasonal_learner
-    web.forecast_reliability = forecast_reliability
-    web.reaction_timing = reaction_timing
-    # Phase 11: Mode controller
-    web.mode_controller = mode_controller
+    # Print component health summary (CC-3 / SLF-015 visibility)
+    n_ok = sum(1 for h in comp.health if h.status == "ok")
+    n_failed = sum(1 for h in comp.health if h.status == "failed")
+    n_disabled = sum(1 for h in comp.health if h.status == "disabled")
+    log("info", f"Component health: {n_ok} ok, {n_failed} failed, {n_disabled} disabled")
+    if n_failed > 0:
+        for h in comp.health:
+            if h.status == "failed":
+                log("warning", f"  [DEGRADED] {h.name}: {h.detail}")
 
     # --- Main decision loop ---
     last_state: Optional[SystemState] = None
@@ -1088,6 +928,32 @@ def _action_to_str(action) -> str:
     ev_str = "ev_charge" if ev_act and ev_act > 0 else "ev_idle"
 
     return f"{bat_str}/{ev_str}"
+
+
+def _install_shutdown_hook(comp):
+    """Register atexit handler that closes long-lived resources cleanly.
+
+    The Renault provider keeps a persistent aiohttp session bound to its own
+    asyncio event loop. Without a shutdown hook the loop is destroyed on
+    interpreter exit while the session has open sockets — Python emits
+    "Unclosed client session" warnings that scare users in HA logs.
+    """
+    import atexit
+
+    def _shutdown():
+        try:
+            for name, prov in getattr(comp.vehicle_monitor._manager, "providers", {}).items():
+                close = getattr(prov, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                        log("info", f"Shutdown: closed provider {name}")
+                    except Exception as e:
+                        log("debug", f"Shutdown: provider {name} close error: {e}")
+        except Exception as e:
+            log("debug", f"Shutdown hook error: {e}")
+
+    atexit.register(_shutdown)
 
 
 if __name__ == "__main__":

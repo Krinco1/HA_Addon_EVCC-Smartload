@@ -49,9 +49,17 @@ class RenaultProvider:
     def is_in_backoff(self) -> bool:
         return time.time() < self._backoff_until
 
+    # Cap on 2**n exponent so that even after months of failed polls we
+    # don't overflow into far-future timestamps. With cap_exp=5, the backoff
+    # caps at 32h (then clamped to 24h below).
+    _MAX_FAILURE_EXP = 5
+
     def record_failure(self):
-        self._failure_count += 1
-        hours = min(2 ** self._failure_count, 24)  # 2h, 4h, 8h, 16h, 24h cap
+        # Clamp BEFORE the shift to avoid building 2**63 when failure_count
+        # accumulates over a long outage.
+        self._failure_count = min(self._failure_count + 1, self._MAX_FAILURE_EXP * 4)
+        exp = min(self._failure_count, self._MAX_FAILURE_EXP)
+        hours = min(2 ** exp, 24)  # 2h, 4h, 8h, 16h, 24h cap
         self._backoff_until = time.time() + hours * 3600
         log("warning", f"RenaultProvider {self.evcc_name}: backoff {hours}h (failure #{self._failure_count})")
 
@@ -116,6 +124,12 @@ class RenaultProvider:
                     log("warning", f"RenaultProvider {self.evcc_name}: batteryLevel is None")
                     return None
 
+                # Renault returns the *last cloud-known* SoC. If the car has
+                # been parked unplugged for days, this is stale data marked
+                # fresh. Use the battery.timestamp / lastEnergyDate field
+                # when present so downstream staleness detection works.
+                api_ts = _renault_timestamp(battery)
+
                 v = VehicleData(
                     name=self.evcc_name,
                     capacity_kwh=self.capacity_kwh,
@@ -123,18 +137,15 @@ class RenaultProvider:
                     provider_type="renault",
                 )
                 v.update_from_api(float(soc))
-                log("info", f"RenaultProvider {self.evcc_name}: SoC={soc}%")
+                if api_ts is not None:
+                    # Override last_update with the actual measurement time —
+                    # otherwise stale-detection sees cloud cache as fresh.
+                    v.last_update = api_ts
+                log("info", f"RenaultProvider {self.evcc_name}: SoC={soc}% (api_ts={api_ts})")
                 self.record_success()
                 return v
             except Exception as e:
-                # Check for 401-like auth errors
-                is_auth_error = False
-                if hasattr(e, 'status') and getattr(e, 'status', 0) == 401:
-                    is_auth_error = True
-                elif '401' in str(e) or 'unauthorized' in str(e).lower():
-                    is_auth_error = True
-
-                if is_auth_error and attempt == 0:
+                if _is_auth_error(e) and attempt == 0:
                     log("info", f"RenaultProvider {self.evcc_name}: auth error — re-authenticating")
                     self._client = None
                     self._vehicle_obj = None
@@ -183,3 +194,48 @@ class RenaultProvider:
     @property
     def supports_active_poll(self) -> bool:
         return bool(self.username and self.password)
+
+
+# =============================================================================
+# Module helpers
+# =============================================================================
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Robust 401 detection — checks structured fields first, falls back to
+    string matching only if the library buries the code inside the message.
+    """
+    # 1. aiohttp.ClientResponseError.status
+    status = getattr(exc, "status", None)
+    if status == 401 or status == 403:
+        return True
+    # 2. Some libraries expose response.status_code or .code
+    for attr in ("status_code", "code", "http_code"):
+        v = getattr(exc, attr, None)
+        if v in (401, 403):
+            return True
+    # 3. renault-api KamereonResponseException carries .error_details
+    err_details = getattr(exc, "error_details", None)
+    if err_details is not None:
+        for d in err_details if isinstance(err_details, list) else [err_details]:
+            code = getattr(d, "errorCode", None) or (d.get("errorCode") if isinstance(d, dict) else None)
+            if code in ("err.func.401", "err.func.403", "err.tech.401"):
+                return True
+    # 4. Last resort: substring match — only when nothing structured is available
+    msg = str(exc).lower()
+    return "401" in msg or "403" in msg or "unauthorized" in msg
+
+
+def _renault_timestamp(battery) -> Optional[datetime]:
+    """Extract the Renault battery measurement timestamp.
+
+    The renault-api ``KamereonVehicleBatteryStatusData`` carries a
+    ``timestamp`` field (ISO 8601 with ``Z``). Returns a UTC-aware datetime
+    or None if absent / unparseable.
+    """
+    ts = getattr(battery, "timestamp", None)
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None

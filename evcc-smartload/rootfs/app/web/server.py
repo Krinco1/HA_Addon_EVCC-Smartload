@@ -186,7 +186,14 @@ class WebServer:
                 if path == "/":
                     self._html(render_template("dashboard.html", {"version": VERSION}))
                 elif path == "/health":
-                    self._json({"status": "ok", "version": VERSION})
+                    health_records = [h.to_dict() for h in getattr(srv, "component_health", [])]
+                    n_failed = sum(1 for h in health_records if h["status"] == "failed")
+                    self._json({
+                        "status": "ok" if n_failed == 0 else "degraded",
+                        "version": VERSION,
+                        "components": health_records,
+                        "components_failed_count": n_failed,
+                    })
                 elif path == "/status":
                     self._json(srv._api_status())
                 elif path == "/slots":
@@ -480,10 +487,13 @@ class WebServer:
         comparison = self.comparator.get_status()
         maturity = self._rl_maturity(comparison)
         p = state.price_percentiles if state else {}
+        health_records = [h.to_dict() for h in getattr(self, "component_health", [])]
         return {
             "timestamp": datetime.now().isoformat(),
             "version": VERSION,
             "rl_maturity": maturity,
+            "component_health": health_records,
+            "components_failed_count": sum(1 for h in health_records if h["status"] == "failed"),
             "current": {
                 "battery_soc": state.battery_soc,
                 "battery_w": state.battery_power,
