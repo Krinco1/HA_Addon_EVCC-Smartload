@@ -2,6 +2,25 @@
 
 ---
 
+## v6.6.5 — `/slots` resilient gegen Tariff-API-Ausfall (2026-05-09)
+
+**Live-Bug**: Wenn die Tariff-Grid-API von evcc 404 lieferte (server-seitiges
+Problem, nicht SmartLoad), gab `/slots` `{"error": "Keine Preisdaten verfügbar"}`
+**ohne** `vehicles`-Key zurück. Das Status-Tab im Dashboard rendert Vehicle-
+Cards aus `slots.vehicles` → keine Cards sichtbar, obwohl `/vehicles` selbst
+sauber alle 3 Fahrzeuge lieferte.
+
+**Fix**: `_calculate_charge_slots()` baut die volle Response (Battery,
+Vehicles, Battery-to-EV) auch ohne hourly Prices. Die Slot-Empfehlungen sind
+dann leer (`status: "Keine Stunden unter Xct"`), aber die Cards bleiben
+sichtbar. Neuer optionaler Key `warning: "Keine Preisdaten verfügbar..."`
+für UI-Hinweis.
+
+Auslöser: evcc Tariff-API lieferte ~7h durchgehend 404 → Status-Tab leer.
+150/150 Tests grün.
+
+---
+
 ## v6.6.4 — Vehicle Config API (2026-05-09)
 
 Zwei neue REST-Endpoints für `vehicles.yaml`-Management:

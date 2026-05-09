@@ -1154,8 +1154,7 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
         except Exception:
             continue
     hourly = sorted([(h, sum(v)/len(v)) for h, v in buckets.items()])
-    if not hourly:
-        return {"error": "Keine Preisdaten verfügbar"}
+    no_prices = not hourly
 
     deadline_hour = cfg.ev_charge_deadline_hour
     if now.hour < deadline_hour:
@@ -1315,6 +1314,9 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
             "ev_need_pct": round(ev_need_pct, 1),
             "cheap_hours": cheap_hours, "solar_surplus_kwh": round(solar_surplus_kwh, 1),
         }
+
+    if no_prices:
+        result["warning"] = "Keine Preisdaten verfügbar — Ladeempfehlungen ausgeblendet"
 
     return result
 
