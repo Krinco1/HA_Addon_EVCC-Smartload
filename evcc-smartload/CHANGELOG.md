@@ -2,6 +2,32 @@
 
 ---
 
+## v6.6.3 — HorizonPlanner Infeasibility v2 + /strategy Crash (2026-05-09)
+
+### v6.6.2 Slot-0-only Bounds-Fix war zu eng
+
+Mit Battery 96% SoC und max_soc 90%: Die Batterie kann nur ~3% pro 15-min-
+Slot ändern (4.3 kW × 0.25h ÷ 33.1 kWh × 0.92 = 0.030 fraction). Selbst
+bei voller Discharge braucht der LP **2 Slots** um von 96% auf 90% zu
+kommen. Mein v6.6.2-Fix relaxte nur Slot 0 → Slot 1 mit bound (0.10, 0.90)
+machte den LP weiter infeasible: `bat_soc[1] ≥ 0.93` (kann nicht weiter
+runter), aber bound forderte ≤ 0.90.
+
+Korrekter Fix: **gesamte Horizon-Bounds** auf
+`(min(min_soc, soc_now), max(max_soc, soc_now))` relaxen. Der LP-Objective
+(`bat_max_price` Penalty + Feed-In-Erlös) motiviert das Modell ohnehin,
+SoC so schnell wirtschaftlich sinnvoll zurück in den Soll-Korridor zu
+bringen — keine harte Constraint nötig. Selbe Logik für EV-SoC.
+
+### /strategy API-Crash bei `ev_action > 0` mit `ev_limit=None`
+
+`web/server.py:790` formatierte `ev_limit:.1f` ohne None-Check.
+TypeError im Dashboard-Strategy-Banner. Trifft bei `ev_action=4`
+(PV-only, kein Limit) auf. Pre-existing — fix: bei None "unbegrenzt"
+ausgeben.
+
+---
+
 ## v6.6.2 — HorizonPlanner Infeasibility-Fix (2026-05-09)
 
 Direkt nach v6.6.1-Deploy hat scipy endlich funktioniert — und sofort den

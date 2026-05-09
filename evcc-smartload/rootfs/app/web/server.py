@@ -787,7 +787,10 @@ class WebServer:
             ev_names = {0: "wartet", 1: "lädt (P30)", 2: "lädt (P60)", 3: "lädt (Max)", 4: "lädt (PV)"}
             ev_label = ev_names.get(lp.ev_action, "?")
             if lp.ev_action > 0:
-                texts.append(f"🔌 {s.ev_name or 'EV'} {ev_label} @ {ev_limit:.1f}ct")
+                # ev_limit can be None (e.g. action=4 PV-only). Render
+                # 'unbegrenzt' instead of crashing the /strategy endpoint.
+                limit_str = f"{ev_limit:.1f}ct" if ev_limit is not None else "unbegrenzt"
+                texts.append(f"🔌 {s.ev_name or 'EV'} {ev_label} @ {limit_str}")
                 actions.append({"device": "ev", "action": "charge", "reason": "price_below_threshold"})
             else:
                 texts.append(f"🔌 {s.ev_name or 'EV'} wartet")

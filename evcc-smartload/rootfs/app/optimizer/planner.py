@@ -433,30 +433,27 @@ class HorizonPlanner:
         # bat_soc: [min_soc, max_soc] (fraction)
         # ev_soc: [0, 1.0] if connected, else [0, 0]
 
-        # bat_soc[0] gets full hardware range so an initial SoC outside the
-        # configured corridor (e.g. battery currently at 96% but max_soc=90%)
-        # doesn't make the LP infeasible. Slot 1..T stay clamped to the
-        # configured operating corridor — within one cycle we'll be back inside.
-        # Same logic for ev_soc[0]: actual EV SoC may exceed target.
+        # If actual battery SoC is outside the configured operating corridor
+        # (e.g. 96% > max_soc 90%), relaxing only slot 0 doesn't help — battery
+        # can only change ~3% per slot, so several slots are needed to bring it
+        # back inside. Relax the whole horizon's upper/lower bounds to envelope
+        # the initial SoC; the LP objective (bat_max_price penalty, feed-in
+        # benefit) will naturally motivate the planner to bring SoC back into
+        # the user's preferred corridor as quickly as economically sensible.
+        # Same logic applies to EV SoC if it already exceeds target.
         bat_soc_init = state.battery_soc / 100.0
         ev_soc_init = ev_current_soc
-        bat_soc_init_range = (
-            min(self._bat_min_soc, bat_soc_init),
-            max(self._bat_max_soc, bat_soc_init),
-        )
-        ev_soc_init_range = (
-            min(0.0, ev_soc_init),
-            max(1.0 if ev_connected else 0.0, ev_soc_init),
-        )
+        bat_min_eff = min(self._bat_min_soc, bat_soc_init)
+        bat_max_eff = max(self._bat_max_soc, bat_soc_init)
+        ev_min_eff = min(0.0, ev_soc_init)
+        ev_max_eff = max(1.0 if ev_connected else 0.0, ev_soc_init)
 
         bounds = (
             [(0.0, self._bat_p_max)] * T           # bat_charge
             + [(0.0, self._bat_p_max)] * T          # bat_discharge
             + [(0.0, ev_charge_power if ev_connected else 0.0)] * T  # ev_charge
-            + [bat_soc_init_range]                  # bat_soc[0] — relaxed
-            + [(self._bat_min_soc, self._bat_max_soc)] * T          # bat_soc[1..T]
-            + [ev_soc_init_range]                   # ev_soc[0] — relaxed
-            + [(0.0, 1.0 if ev_connected else 0.0)] * T             # ev_soc[1..T]
+            + [(bat_min_eff, bat_max_eff)] * (T + 1)                 # bat_soc
+            + [(ev_min_eff, ev_max_eff)] * (T + 1)                   # ev_soc
         )
 
         # --- Solve ---
