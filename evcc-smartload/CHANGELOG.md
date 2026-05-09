@@ -2,6 +2,35 @@
 
 ---
 
+## v6.6.2 — HorizonPlanner Infeasibility-Fix (2026-05-09)
+
+Direkt nach v6.6.1-Deploy hat scipy endlich funktioniert — und sofort den
+**dritten** kaschierten Bug aufgedeckt:
+
+```
+HorizonPlanner: LP solved in 0.0s, status=2
+  (The problem is infeasible. HiGHS Status 8: model_status is Infeasible)
+```
+
+Ursache: HorizonPlanner setzt `bat_soc[0..T]` Variable-Bounds auf
+`[battery_min_soc, battery_max_soc]` (z.B. 10%–90%) und gleichzeitig eine
+Equality-Constraint `bat_soc[0] = current_battery_soc / 100`. Wenn die
+Batterie aktuell bei 96% ist und `battery_max_soc` auf 90% steht, sind
+diese Constraints **by construction unverträglich**.
+
+Fix: Slot 0 (Initial-Bedingung) bekommt volle Hardware-Range
+`(min(min_soc, soc_now), max(max_soc, soc_now))`. Slot 1..T bleiben im
+konfigurierten Operating-Korridor — innerhalb einer Stunde ist die
+Batterie wieder im Soll-Bereich. Selbe Logik für `ev_soc[0]` falls aktueller
+EV-SoC > Target liegt.
+
+**Hat seit v1.0 jeden Cycle das LP fehlschlagen lassen wenn battery_soc
+außerhalb [min, max] lag** — was praktisch *immer* der Fall war an
+sonnigen Tagen mit voller Batterie. Resultat: HolisticOptimizer-Fallback
+statt 96-Slot-LP. Jetzt greift LP echt.
+
+---
+
 ## v6.6.1 — Live-Hotfix nach v6.6.0 Deploy (2026-05-09)
 
 Zwei Issues, beide direkt aus dem v6.6.0-Live-Log entdeckt:
