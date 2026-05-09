@@ -2,6 +2,46 @@
 
 ---
 
+## v6.6.1 — Live-Hotfix nach v6.6.0 Deploy (2026-05-09)
+
+Zwei Issues, beide direkt aus dem v6.6.0-Live-Log entdeckt:
+
+### DynamicBufferCalc Crash bei persistiertem Log
+
+`step()` rief `e.to_dict()` auf alle Log-Einträge, aber `_load()` füllt
+`_log` aus dem JSON mit *plain dicts* — nur frisch via `step()` selbst
+angefügte Einträge sind echte `BufferEvent` Instanzen. Beim ersten Cycle
+nach Restart crashte das mit `'dict' object has no attribute 'to_dict'`.
+Fix: defensive isinstance-Prüfung wie in `_build_model_dict` (war dort
+schon korrekt). 1-Zeilen-Fix in `dynamic_buffer.py:198`.
+
+**Pre-existing seit Phase 5**, jetzt aufgedeckt weil v6.6.0 das Component-
+Health-Tracking eingeführt hat und der Fehler im Log direkt sichtbar wurde.
+
+### scipy.optimize fehlte zur Laufzeit
+
+`py3-scipy` apk-Paket installiert die scipy-Basis, aber `linprog` /
+HiGHS-Submodul fehlt — HorizonPlanner sagt beim Init zwar
+`initialized (scipy/HiGHS LP solver)` ok, aber bei jedem `plan()`-Call
+crasht der Lazy-Import von `scipy.optimize.linprog` mit
+`No module named 'scipy'`. Result: HolisticOptimizer-Fallback in jedem
+Cycle — d.h. **kein 96-Slot LP, nur reaktiv-heuristisch**.
+
+Dockerfile-Fix:
+- `py3-numpy` zu apk-Layer hinzugefügt
+- `scipy` und `numpy` zusätzlich via pip installiert (überschreibt
+  apk-Stub falls nötig)
+- Build-time Selbsttest: `python3 -c "from scipy.optimize import linprog"`
+  failt den Build wenn der Import nicht klappt → keine stillen
+  Container-Releases mehr ohne LP-Solver
+
+**Erkannt durch:** `Component health: 25 ok, 0 failed, 2 disabled` Logging
+hat zwar HorizonPlanner als "ok" gemeldet, aber der LP-Solve-Fehler erst
+zur Laufzeit sichtbar wurde. Add-on health=ok wäre also überoptimistisch
+gewesen — das LP-vs-Heuristic Verhalten ist jetzt kein blinder Fleck mehr.
+
+---
+
 ## v6.6.0 — Bootstrap-Refactor + Renault-Hardening + Component-Health (2026-05-09)
 
 Drei strukturelle Verbesserungen, +11 neue Regressionstests.

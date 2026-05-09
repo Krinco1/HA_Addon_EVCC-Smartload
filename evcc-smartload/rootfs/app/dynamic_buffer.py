@@ -195,7 +195,13 @@ class DynamicBufferCalc:
         self._save()
 
         with self._lock:
-            log_recent = [e.to_dict() for e in list(self._log)[-100:]]
+            # _log can contain BufferEvent objects (freshly appended by step())
+            # AND plain dicts (restored from disk by _load()). Apply the same
+            # defensive isinstance check as _build_model_dict line ~425.
+            log_recent = [
+                e.to_dict() if isinstance(e, BufferEvent) else e
+                for e in list(self._log)[-100:]
+            ]
             current_buf = self._current_buffer_pct
 
         days_remaining = self._days_remaining(now) if mode == "observation" else None
