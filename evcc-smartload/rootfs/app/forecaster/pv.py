@@ -19,11 +19,18 @@ Nighttime guard (Research Pitfall 7):
 
 import json
 import os
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import List, Optional
 
+# Allow `from persistence_util import ...` when this submodule is imported
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+
 from logging_util import log
+from persistence_util import atomic_json_write
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -416,10 +423,7 @@ class PVForecaster:
                 else None
             ),
         }
-        tmp_path = PV_MODEL_PATH + ".tmp"
         try:
-            with open(tmp_path, "w") as f:
-                json.dump(model, f, indent=2)
-            os.rename(tmp_path, PV_MODEL_PATH)
+            atomic_json_write(PV_MODEL_PATH, model)
         except Exception as e:
             log("error", f"PV forecast: failed to save model: {e}")

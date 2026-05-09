@@ -240,6 +240,13 @@ def main():
     except Exception as e:
         log("warning", f"EvccModeController: init failed ({e}), mode control disabled")
 
+    # v6.5.0: hand mode-write ownership to ModeController so Sequencer's
+    # mode writes (which would otherwise be misread as user overrides) are
+    # suppressed. Sequencer falls back to writing modes only when
+    # ModeController is unavailable.
+    if mode_controller is not None and sequencer is not None:
+        sequencer.mode_writes_owned_externally = True
+
     # --- Register all known devices for RL tracking ---
     rl_devices.get_device_mode("battery")
     for vp in cfg.vehicle_providers:

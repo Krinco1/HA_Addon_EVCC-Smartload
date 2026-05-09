@@ -139,47 +139,38 @@ class Comparator:
         rl_action: Action,
         actual_cost: float,
     ):
-        price = state.current_price
-        p20 = state.price_percentiles.get(20, price)
-        p60 = state.price_percentiles.get(60, price)
+        """Record an LP-vs-RL action pair for traceability.
 
-        rl_sim_cost = actual_cost
-        # RL charged at cheap price → simulated savings
-        if rl_action.battery_action in (1, 2) and price <= p20:
-            rl_sim_cost -= 0.05
-        elif rl_action.battery_action == 0 and lp_action.battery_action in (1, 2) and price > p60:
-            rl_sim_cost -= 0.03  # RL correctly avoided expensive grid
-        elif rl_action.battery_action == 6 and price > p60:
-            rl_sim_cost -= 0.04  # RL discharged at expensive price
-
+        Historical note (v6.5.0): the previous implementation synthesized an
+        "RL would have saved 5/3/4 ct" heuristic from the action codes. That
+        was meaningful for the v5 DQN agent (full action selection), but
+        ResidualRLAgent only adjusts price thresholds — it never picks a
+        different battery_action. The synthetic comparison was therefore a
+        constant lie. We keep the action-pair record for `/comparisons`
+        observability and let ``rl_ready``/``rl_wins`` be derived from
+        ``compare_residual()`` (real slot-0 cost accounting).
+        """
         self.comparisons.append({
             "timestamp": state.timestamp.isoformat(),
             "lp_action": (lp_action.battery_action, lp_action.ev_action),
             "rl_action": (rl_action.battery_action, rl_action.ev_action),
-            "price": price,
+            "price": state.current_price,
             "battery_soc": state.battery_soc,
             "lp_cost": actual_cost,
-            "rl_simulated_cost": rl_sim_cost,
-            "rl_better": rl_sim_cost <= actual_cost,
+            # rl_better is now derived from residual comparisons in get_status();
+            # leaving the field unset keeps the dashboard schema stable.
         })
         if len(self.comparisons) > _MAX_COMPARISONS:
             del self.comparisons[: len(self.comparisons) - _MAX_COMPARISONS]
 
         self.lp_total_cost += actual_cost
-        self.rl_total_cost += rl_sim_cost
-        if rl_sim_cost <= actual_cost:
-            self.rl_wins += 1
 
         n = len(self.comparisons)
-        if n >= self.cfg.rl_ready_min_comparisons:
-            win_rate = self.rl_wins / n
-            if win_rate >= self.cfg.rl_ready_threshold and not self.rl_ready:
-                self.rl_ready = True
-                log("info", f"🎉 RL READY! Win-Rate: {win_rate * 100:.1f}%")
-
-        if n % 50 == 0:
-            log("info", f"RL Progress: {n} comparisons, win rate {self.rl_wins / n * 100:.1f}%")
-        self.save()
+        if n % 100 == 0:
+            log("info", f"Comparator: {n} action-pair records, "
+                        f"{len(self._residual_comparisons)} residual cost samples")
+        # Persistence happens via compare_residual() which is called every cycle
+        # too. Skipping save() here drops 4× I/O without losing data.
 
     def compare_per_device(
         self,
@@ -280,6 +271,23 @@ class Comparator:
     # ResidualRLAgent slot-0 cost comparisons (Phase 8)
     # ------------------------------------------------------------------
 
+    def _refresh_residual_aggregate(self) -> None:
+        """Recompute rl_wins / rl_total_cost / rl_ready from residual entries.
+
+        Single source of truth for "is RL helping?": real plan-cost vs actual-
+        cost, summed across all residual entries.
+        """
+        wins = sum(1 for e in self._residual_comparisons if e.get("rl_better"))
+        total_actual = sum(e.get("actual_cost_eur", 0.0) for e in self._residual_comparisons)
+        self.rl_wins = wins
+        self.rl_total_cost = total_actual
+        n = len(self._residual_comparisons)
+        if n >= self.cfg.rl_ready_min_comparisons:
+            win_rate = wins / n
+            if win_rate >= self.cfg.rl_ready_threshold and not self.rl_ready:
+                self.rl_ready = True
+                log("info", f"🎉 RL READY! Residual win-rate: {win_rate * 100:.1f}% over {n} samples")
+
     def compare_residual(
         self,
         plan_slot0_cost_eur: float,
@@ -313,6 +321,7 @@ class Comparator:
         self._residual_comparisons.append(entry)
         if len(self._residual_comparisons) > _MAX_RESIDUAL_COMPARISONS:
             del self._residual_comparisons[: len(self._residual_comparisons) - _MAX_RESIDUAL_COMPARISONS]
+        self._refresh_residual_aggregate()
         self.save()
 
     def get_recent_comparisons(self, days: int = 7) -> List[Dict]:
@@ -389,11 +398,15 @@ class Comparator:
             return None
 
     def get_status(self) -> Dict:
-        n = len(self.comparisons)
+        # Win-rate is computed from residual cost samples (real plan vs actual),
+        # not from the legacy action-pair list. comparisons is just a trace
+        # buffer for the dashboard's history view.
+        n_residual = len(self._residual_comparisons)
         return {
-            "comparisons": n,
+            "comparisons": len(self.comparisons),
+            "residual_samples": n_residual,
             "rl_wins": self.rl_wins,
-            "win_rate": self.rl_wins / n if n else 0,
+            "win_rate": self.rl_wins / n_residual if n_residual else 0,
             "lp_total_cost": self.lp_total_cost,
             "rl_total_cost": self.rl_total_cost,
             "rl_ready": self.rl_ready,

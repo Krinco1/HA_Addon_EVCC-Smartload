@@ -16,10 +16,17 @@ for all slots. After 24h of real data, is_ready becomes True.
 
 import json
 import os
+import sys
 import threading
 from datetime import datetime, timezone
 
+# Allow `from persistence_util import ...` when this submodule is imported
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+
 from logging_util import log
+from persistence_util import atomic_json_write
 
 # Persistent storage
 MODEL_PATH = "/data/smartprice_consumption_model.json"
@@ -338,10 +345,7 @@ class ConsumptionForecaster:
                 "data_days": self._data_days,
                 "correction_factor": self._correction_factor,
             }
-            tmp_path = MODEL_PATH + ".tmp"
-            with open(tmp_path, "w") as f:
-                json.dump(model, f, indent=2)
-            os.rename(tmp_path, MODEL_PATH)
+            atomic_json_write(MODEL_PATH, model)
         except Exception as e:
             log("warning", f"ConsumptionForecaster: save failed: {e}")
 

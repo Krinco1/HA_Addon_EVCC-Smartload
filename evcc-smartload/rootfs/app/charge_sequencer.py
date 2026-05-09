@@ -82,6 +82,11 @@ class ChargeSequencer:
         self._last_applied_vehicle: Optional[str] = None
         # Phase 7 Plan 03: injected by main.py (late-assignment pattern)
         self.departure_store = None
+        # v6.5.0: when EvccModeController is the mode owner, Sequencer must NOT
+        # call set_loadpoint_mode. Otherwise ModeController detects Sequencer's
+        # writes as a manual user override and pauses itself permanently.
+        # main.py sets this to True after instantiating EvccModeController.
+        self.mode_writes_owned_externally: bool = False
 
     # ------------------------------------------------------------------
     # Request management
@@ -344,26 +349,41 @@ class ChargeSequencer:
     # ------------------------------------------------------------------
 
     def apply_to_evcc(self, now: datetime):
-        """Send current schedule to evcc (loadpoint 1)."""
+        """Send current schedule to evcc (loadpoint 1).
+
+        Owner contract (v6.5.0):
+          - target_soc: always written (Sequencer owns *what* SoC each vehicle
+            should reach for the active slot — orthogonal to mode).
+          - mode: only written when ``mode_writes_owned_externally`` is False,
+            i.e. EvccModeController is unavailable. Otherwise ModeController
+            owns the mode-write channel and Sequencer's writes would be
+            mis-detected as manual user overrides (HI-07).
+        """
         active = self._get_active_slot(now)
         if active:
             with self._lock:
                 req = self.requests.get(active.vehicle_name)
             if req:
                 self.evcc.set_loadpoint_targetsoc(1, req.target_soc)
+
             mode = "pv" if active.source == "solar" else "minpv"
-            self.evcc.set_loadpoint_mode(1, mode)
+            if not self.mode_writes_owned_externally:
+                self.evcc.set_loadpoint_mode(1, mode)
+
             if self._last_applied_vehicle != active.vehicle_name:
                 if self._last_applied_vehicle is not None:
                     log("info", f"Sequencer: transition {self._last_applied_vehicle}(done) -> {active.vehicle_name}(charging) at {now.isoformat()}")
                 else:
-                    log("info", f"Sequencer: activating {active.vehicle_name} ({mode})")
+                    suffix = f" ({mode})" if not self.mode_writes_owned_externally else " [mode owned by ModeController]"
+                    log("info", f"Sequencer: activating {active.vehicle_name}{suffix}")
                 self._last_applied_vehicle = active.vehicle_name
         else:
-            # No active slot; if we were controlling, reset
             if self._last_applied_vehicle is not None:
-                log("info", "Sequencer: no active slot -> loadpoint off")
-                self.evcc.set_loadpoint_mode(1, "off")
+                if not self.mode_writes_owned_externally:
+                    log("info", "Sequencer: no active slot -> loadpoint off")
+                    self.evcc.set_loadpoint_mode(1, "off")
+                else:
+                    log("debug", "Sequencer: no active slot — ModeController will handle off")
                 self._last_applied_vehicle = None
 
     def _get_active_slot(self, now: datetime) -> Optional[ChargeSlot]:

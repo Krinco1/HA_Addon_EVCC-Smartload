@@ -2,6 +2,84 @@
 
 ---
 
+## v6.5.0 — Strukturelle Cleanups & ehrliche Metriken (2026-05-09)
+
+Vier strukturelle Refactors, +16 neue Regressionstests, retrospektives Replay-Tool.
+
+### Comparator: legacy compare() ist nicht mehr eine Lüge (CR-04)
+
+Bisher schrieb `Comparator.compare()` synthetische "RL hat 5/3/4ct gespart"
+Werte aus den Action-Codes ab — sinnvoll für die alte v5-DQN-Architektur, aber
+**nicht** für den ResidualRLAgent: der ändert keine `battery_action`-Werte
+mehr, nur die Preisschwellen `battery_limit_eur`. Die "RL Win-Rate" auf dem
+Dashboard war daher ~100% by construction und bedeutungslos.
+
+- `compare()` zeichnet jetzt nur noch das Action-Pair für die
+  Trace-View auf (`/comparisons` Endpoint), keine Fake-Wins mehr.
+- `rl_wins`, `rl_total_cost`, `rl_ready` werden ausschließlich aus
+  `compare_residual()` (echte slot-0 Plan-vs-Actual-Cost) abgeleitet via
+  neuem `_refresh_residual_aggregate()`.
+- `get_status()` exposed jetzt `residual_samples` zusätzlich zur legacy
+  `comparisons`-Zahl.
+
+### Sequencer ↔ ModeController Owner-Kontrakt (HI-07)
+
+Bisher schrieben beide `set_loadpoint_mode(1, ...)`. ModeController las
+Sequencers Schreibvorgang als manuellen User-Override und pausierte sich
+permanent. Neue Regel:
+
+- `ChargeSequencer.mode_writes_owned_externally` (default `False`).
+  `main.py` setzt sie auf `True` direkt nach erfolgreichem
+  `EvccModeController` Init. Sequencer schreibt dann nur noch `targetsoc`.
+- ModeController bleibt Single-Writer für `mode`. Wenn Init failed, fällt
+  Sequencer auf alte Semantik zurück.
+
+### Persistence-Util (CC-8)
+
+`persistence_util.atomic_json_write(path, data)` — `os.replace`-basiert,
+crash-safe auf Linux *und* Windows (`os.rename` war auf Windows nicht
+atomic). `dynamic_buffer.py`, `forecaster/consumption.py`, `forecaster/pv.py`
+migriert. `state.py`, `comparator.py`, `seasonal_learner.py`,
+`forecast_reliability.py`, `reaction_timing.py`, `rl_agent.py`,
+`departure_store.py` haben bereits `os.replace` und werden in einer
+folgenden Session konsolidiert.
+
+### Dead Code raus
+
+- `rl_agent._DeprecatedDQNAgent` (~207 LoC) entfernt. Old `q_table`-Files
+  werden vom ResidualRLAgent.load auto-detected und reset.
+
+### Retrospektives Replay-Tool
+
+`tools/replay.py` — pullt InfluxDB-State über N Tage, berechnet:
+- Energie-Bilanz (Grid-Import/Export, PV, Haus, Self-Consumption)
+- Tatsächliche Stromkosten in EUR
+- Action-Distribution (Battery + EV)
+- **Decision-Quality:** Wie oft hat die Batterie aus dem Netz geladen,
+  wenn der Preis im Cheap/Medium/Expensive-Bucket war? Schnelle
+  Antwort auf "Macht der Planer Sinn?".
+
+Ausführung im Container:
+```
+docker exec -it addon_evcc_smartload python /app/tools/replay.py --days 7
+```
+
+### Tests
+
+- `+16` neue Tests in `test_v6_5_0_regressions.py`. **117/117 grün.**
+- Pinning der oben genannten Fixes gegen Regression: SoC-Parser-
+  Toleranz, Cooldown-Logik, Sequencer-Mode-Owner, Comparator
+  Residual-Drive, persistence atomic write, OverrideManager UTC.
+
+### Verbleibend für v6.6.0 / v2.0
+
+- main.py → `bootstrap.py` + `decision_loop.py` + `learning.py` Refactor
+- Multi-LP-Strategie-Entscheidung (SLF-017)
+- Component-Health-Banner (SLF-015)
+- Renault Hardening (SLF-014 ff.)
+
+---
+
 ## v6.4.1 — Audit Cleanup Bundle (2026-05-09)
 
 Sieben low-risk-Findings aus dem Architektur-Audit (`REVIEW-FULL-2026-05-09.md`)

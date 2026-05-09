@@ -20,6 +20,8 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+from persistence_util import atomic_json_write
+
 BUFFER_MODEL_PATH = "/data/smartload_buffer_model.json"
 BUFFER_MODEL_VERSION = 1
 
@@ -392,24 +394,16 @@ class DynamicBufferCalc:
             model = self._build_model_dict()
 
         # File I/O outside the lock to avoid blocking SSE reads (Pitfall 2)
-        tmp = BUFFER_MODEL_PATH + ".tmp"
         try:
-            with open(tmp, "w") as f:
-                json.dump(model, f, indent=2)
-            os.rename(tmp, BUFFER_MODEL_PATH)
+            atomic_json_write(BUFFER_MODEL_PATH, model)
         except Exception:
             pass
 
     def _save_unlocked(self) -> None:
         """Must be called while already holding self._lock (e.g. from _determine_mode)."""
         model = self._build_model_dict()
-        # Release lock before file I/O — caller must re-acquire if needed
-        # (This method is only called from _determine_mode which immediately returns)
-        tmp = BUFFER_MODEL_PATH + ".tmp"
         try:
-            with open(tmp, "w") as f:
-                json.dump(model, f, indent=2)
-            os.rename(tmp, BUFFER_MODEL_PATH)
+            atomic_json_write(BUFFER_MODEL_PATH, model)
         except Exception:
             pass
 
