@@ -2,6 +2,24 @@
 
 ---
 
+## v6.6.6 — RenaultProvider akzeptiert evcc-Style `user:` + do_POST JSON-Guard (2026-05-09)
+
+**Bug 1**: `RenaultProvider` las nur `username:` aus der vehicles.yaml. evcc-Style
+YAML (`type: template, template: renault`) nutzt aber `user:` (kürzer) — daher
+blieben Username/Password leer, `supports_active_poll` returnte False und der
+Twingo wurde nie aktiv gepollt (Log: `no vehicles with active API polling
+configured`). Fix: `username` ODER `user` akzeptieren.
+
+**Bug 2**: `do_POST` parste JSON ungeschützt mit `json.loads(...)`. Bei kaputtem
+Body (z.B. PowerShell-curl mit fehlerhaftem Quoting) feuerte ein unhandled
+`ValueError` und der HTTP-Server schloss die Verbindung ohne Response →
+`"Empty reply from server"` / `"ResponseEnded"` auf Client-Seite. Fix:
+JSON-Parse in try/except, bei Fehler 400 mit `{"error": "invalid JSON body"}`.
+
+150/150 Tests grün.
+
+---
+
 ## v6.6.5 — `/slots` resilient gegen Tariff-API-Ausfall (2026-05-09)
 
 **Live-Bug**: Wenn die Tariff-Grid-API von evcc 404 lieferte (server-seitiges

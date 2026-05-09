@@ -30,7 +30,9 @@ class RenaultProvider:
 
     def __init__(self, config: dict):
         self.evcc_name = config.get("evcc_name") or config.get("name", "renault")
-        self.username = config.get("username", "")
+        # evcc-style YAML uses ``user``; SmartLoad-native uses ``username``.
+        # Accept either so users can paste the evcc vehicle block 1:1.
+        self.username = config.get("username") or config.get("user", "")
         self.password = config.get("password", "")
         self.vin = config.get("vin")
         self.locale = config.get("locale", "de_DE")

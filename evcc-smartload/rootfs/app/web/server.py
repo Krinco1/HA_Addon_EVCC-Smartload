@@ -323,7 +323,12 @@ class WebServer:
             def do_POST(self):
                 path = self.path
                 length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length)) if length else {}
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw) if raw else {}
+                except (ValueError, TypeError):
+                    self._json({"error": "invalid JSON body"}, 400)
+                    return
 
                 if path == "/vehicles/manual-soc":
                     name = body.get("vehicle", "")
