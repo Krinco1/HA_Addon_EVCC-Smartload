@@ -342,6 +342,43 @@ class WebServer:
                     srv.vehicle_monitor.trigger_refresh(name)
                     self._json({"ok": True, "vehicle": name, "soc": soc})
 
+                elif path == "/vehicles/remove":
+                    # v6.6.4: rewrite vehicles.yaml + drivers.yaml to drop a vehicle
+                    # entirely. Caller must restart the add-on for the change to
+                    # take effect (VehicleManager has no hot-reload).
+                    name = body.get("vehicle", "")
+                    if not name:
+                        self._json({"error": "vehicle required"}, 400)
+                        return
+                    try:
+                        from vehicle_config_manager import remove_vehicle
+                        from config import VEHICLES_YAML_PATH, DRIVERS_YAML_PATH
+                        result = remove_vehicle(name, VEHICLES_YAML_PATH, DRIVERS_YAML_PATH)
+                        result["restart_required"] = result["vehicle_removed"]
+                        self._json(result)
+                    except FileNotFoundError as e:
+                        self._json({"error": str(e)}, 404)
+                    except Exception as e:
+                        self._json({"error": str(e)}, 500)
+
+                elif path == "/vehicles/disable":
+                    # v6.6.4: set ``disabled: true`` on the vehicle's config —
+                    # non-destructive, can be reverted by editing the yaml.
+                    name = body.get("vehicle", "")
+                    if not name:
+                        self._json({"error": "vehicle required"}, 400)
+                        return
+                    try:
+                        from vehicle_config_manager import disable_vehicle
+                        from config import VEHICLES_YAML_PATH
+                        result = disable_vehicle(name, VEHICLES_YAML_PATH)
+                        result["restart_required"] = result.get("vehicle_disabled", False)
+                        self._json(result)
+                    except FileNotFoundError as e:
+                        self._json({"error": str(e)}, 404)
+                    except Exception as e:
+                        self._json({"error": str(e)}, 500)
+
                 elif path == "/rl-override":
                     device = body.get("device", "")
                     mode = body.get("mode")

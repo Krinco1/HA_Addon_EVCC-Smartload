@@ -2,6 +2,29 @@
 
 ---
 
+## v6.6.4 — Vehicle Config API (2026-05-09)
+
+Zwei neue REST-Endpoints für `vehicles.yaml`-Management:
+
+- `POST /vehicles/remove` — Body `{"vehicle": "<name>"}` → entfernt das
+  Vehicle aus `vehicles.yaml` UND aus jedem `drivers.yaml` Driver-Vehicles-
+  Listen. Atomic write mit `.bak`-Backup. Returns `restart_required: true`.
+- `POST /vehicles/disable` — Body `{"vehicle": "<name>"}` → setzt
+  `disabled: true` auf den Vehicle-Block. Non-destructive. VehicleManager
+  filtert disabled-Vehicles bereits beim Polling.
+
+Beide Endpoints sind für automatisierte Vehicle-Management nutzbar (z.B.
+HA-Automation: Auto-Verkauf → Webhook → /vehicles/remove). 9 neue Tests
+in `test_vehicle_config_manager.py`. **150/150 grün.**
+
+Bekannte Einschränkungen:
+- VehicleManager hat keinen Hot-Reload — Add-on-Restart nach `/remove`
+  oder `/disable` erforderlich (response enthält `restart_required`).
+- PyYAML round-trip entfernt Kommentare im YAML. `.bak`-Snapshot wird
+  vor dem Rewrite geschrieben für manuelle Recovery.
+
+---
+
 ## v6.6.3 — HorizonPlanner Infeasibility v2 + /strategy Crash (2026-05-09)
 
 ### v6.6.2 Slot-0-only Bounds-Fix war zu eng
