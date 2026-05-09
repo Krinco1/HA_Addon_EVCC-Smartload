@@ -2,6 +2,62 @@
 
 ---
 
+## v6.4.1 — Audit Cleanup Bundle (2026-05-09)
+
+Sieben low-risk-Findings aus dem Architektur-Audit (`REVIEW-FULL-2026-05-09.md`)
+in einem Bundle gefixt — alle ohne Verhaltensänderung im Hauptpfad.
+
+### Concurrency
+
+- **CR-01:** `main.py:606` las `collector._evcc_raw` ohne Lock; DataCollector
+  schreibt unter Lock. Neuer `VehicleMonitor.get_evcc_raw()` Accessor.
+
+### Timezone-Korrektheit (deckt 6.3.1-Lücke)
+
+- **HI-01:** `decision_log.py`, `web/server.py` (3 Stellen), `charge_sequencer.py`
+  (2 Stellen) und `notification.py` (2 Stellen) nutzten `dt.astimezone()` ohne
+  Argument → System-TZ (UTC im Alpine-Container) statt Europe/Berlin. Alle
+  durch `to_local()` aus `time_util` ersetzt. Dashboard-Zeiten zeigen jetzt
+  korrekt lokale Zeit auch ohne `TZ`-Env-Var.
+- **CR-03:** `OverrideManager` nutzte naives `datetime.now()`; bei Subtraktion
+  von UTC-aware Timestamps gab es `TypeError`. Jetzt durchgängig
+  `datetime.now(timezone.utc)`.
+
+### Dead Code
+
+- **HI-02:** `optimizer/event_detector.py` (57 LoC) gelöscht — zweite
+  EventDetector-Klasse, die keinen Importer hatte. `optimizer/events.py`
+  ist die kanonische Quelle.
+
+### Memory-Caps
+
+- **HI-04:** `Comparator.comparisons` (legacy) und `_residual_comparisons`
+  bekommen In-Memory-Caps (1000 / 2000 Einträge). Vorher unbegrenzt
+  wachsend bei langen Laufzeiten.
+
+### User-Facing Robustheit
+
+- **CR-08:** `_handle_text_message` SoC-Parser akzeptiert jetzt auch `"80%"`,
+  `"80 %"`, `"80,5"`, `"80.5"` — vorher nur `int(text)`, alles andere wurde
+  stillschweigend verworfen. Neue Helper-Funktion `_parse_soc_text`.
+- **HI-10/11 (SLF-013):** Notification-Cooldown.
+  - `send_charge_inquiry`: Cooldown 4h pro Fahrzeug. Vorher wurde bei jedem
+    15-min-Cycle eine identische Inquiry gesendet, sobald `pending_inquiries`
+    durch eine Antwort geleert wurde — bis zu 48 Telegrams in einer 12-h-
+    Niedrigpreis-Phase.
+  - `send_plug_reminder`: Cooldown 1h pro Fahrzeug. Vorher 4 Reminder/Stunde
+    während des Pre-Quiet-Fensters.
+
+### Audit-Trail
+
+- Begleitend: `.planning/REVIEW-FULL-2026-05-09.md` (gsd-code-reviewer Bericht
+  mit 8 CRITICAL + 14 HIGH + 17 MEDIUM Findings) und
+  `.planning/ARCHITECTURE-ANALYSIS-2026-05-09.md`.
+- Verbleibende v2.0-Items: PR #9 Sequencer↔ModeController-Race,
+  PR #11 Comparator-Refactor (RL Win-Rate misst nichts), main.py-Refactor.
+
+---
+
 ## v6.4.0 — KIA-Provider entfernt + Architektur-Audit (2026-05-09)
 
 **KIA / Hyundai / Genesis Cloud-Polling final entfernt** — Bluelink-Cloud war über

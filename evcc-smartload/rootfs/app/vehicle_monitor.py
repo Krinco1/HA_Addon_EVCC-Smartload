@@ -352,3 +352,11 @@ class DataCollector:
         """Return the most recently collected system state."""
         with self._lock:
             return self._state
+
+    def get_evcc_raw(self) -> Optional[dict]:
+        """Return the most recent raw evcc /api/state response (lock-protected).
+
+        Caller treats result as read-only. Used by EvccModeController in main.py.
+        """
+        with self._lock:
+            return self._evcc_raw

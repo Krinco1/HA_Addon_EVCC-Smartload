@@ -19,6 +19,22 @@ from typing import Callable, Dict, List, Optional
 import requests
 
 from logging_util import log
+from time_util import to_local
+
+
+def _parse_soc_text(text: str) -> Optional[int]:
+    """Parse a free-text SoC reply tolerantly.
+
+    Accepts: "80", "80%", "80 %", " 80%", "80,5" (rounded), "80.5" (rounded).
+    Returns the integer percent or None if no number found.
+    """
+    if not text:
+        return None
+    cleaned = text.strip().replace("%", "").replace(",", ".").strip()
+    try:
+        return int(round(float(cleaned)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _esc(value) -> str:
@@ -218,6 +234,11 @@ class NotificationManager:
         self.drivers = driver_manager
         self.on_soc_response = on_soc_response
         self.pending_inquiries: Dict[str, datetime] = {}   # vehicle → sent_at
+        # Cooldown trackers — survive across reply/clear of pending_inquiries.
+        # Without these, main loop's _check_notification_triggers re-fires
+        # the inquiry every 15-min cycle whenever price stays under P30.
+        self._last_inquiry_sent: Dict[str, datetime] = {}
+        self._last_plug_reminder: Dict[str, datetime] = {}
         # Phase 7: OverrideManager — injected by main.py as late attribute
         self.override_manager = None
         # Phase 7 Plan 02: DepartureTimeStore — injected by main.py as late attribute
@@ -255,11 +276,13 @@ class NotificationManager:
             log("info", f"No Telegram for {vehicle_name} — skipping notification")
             return False
 
-        # Throttle: don't re-ask within 2 hours
-        if vehicle_name in self.pending_inquiries:
-            age_h = (datetime.now() - self.pending_inquiries[vehicle_name]).total_seconds() / 3600
-            if age_h < 2:
-                return False
+        # Cooldown: don't re-ask within 4 hours, regardless of whether the user
+        # already replied (replying clears pending_inquiries — so we keep a
+        # second timestamp dict that survives clears).
+        now_utc = datetime.now(timezone.utc)
+        last = self._last_inquiry_sent.get(vehicle_name)
+        if last is not None and (now_utc - last).total_seconds() < 4 * 3600:
+            return False
 
         # Build vehicle key for boost callback (replace spaces with underscores)
         vehicle_key = vehicle_name.replace(" ", "_")
@@ -280,16 +303,27 @@ class NotificationManager:
 
         success = self.bot.send_message(driver.telegram_chat_id, msg, keyboard)
         if success:
-            self.pending_inquiries[vehicle_name] = datetime.now()
+            self.pending_inquiries[vehicle_name] = now_utc
+            self._last_inquiry_sent[vehicle_name] = now_utc
             log("info", f"Telegram: charge inquiry sent to {driver.name} for {vehicle_name}")
         return success
 
     def send_plug_reminder(self, vehicle_name: str, message: str):
-        """Reminder: please plug in EV before quiet hours."""
+        """Reminder: please plug in EV before quiet hours.
+
+        Cooldown: at most one reminder per vehicle per hour. Sequencer calls
+        this every 15-min cycle while the recommendation is active, so without
+        a cooldown the user gets 4 reminders/hour for the full pre-quiet window.
+        """
         driver = self.drivers.get_driver(vehicle_name)
         if not driver or not driver.telegram_chat_id:
             return
-        self.bot.send_message(driver.telegram_chat_id, f"🔌 {message}")
+        now_utc = datetime.now(timezone.utc)
+        last = self._last_plug_reminder.get(vehicle_name)
+        if last is not None and (now_utc - last).total_seconds() < 3600:
+            return
+        if self.bot.send_message(driver.telegram_chat_id, f"🔌 {message}"):
+            self._last_plug_reminder[vehicle_name] = now_utc
 
     def send_charge_complete(self, vehicle_name: str, final_soc: float):
         driver = self.drivers.get_driver(vehicle_name)
@@ -422,7 +456,7 @@ class NotificationManager:
             self._pending_departure_vehicle = None
 
         # Display in local time for user-facing confirmation
-        local_departure = departure.astimezone()
+        local_departure = to_local(departure)
         self.bot.send_message(
             chat_id,
             f"Alles klar! {vehicle_name} wird bis {local_departure.strftime('%H:%M')} fertig sein.",
@@ -480,7 +514,7 @@ class NotificationManager:
             departure = parse_departure_time(text, now)
             if departure is not None:
                 self.departure_store.set(self._pending_departure_vehicle, departure)
-                local_departure = departure.astimezone()
+                local_departure = to_local(departure)
                 vehicle_name = self._pending_departure_vehicle
                 self._pending_departure_vehicle = None
                 self.bot.send_message(
@@ -499,15 +533,12 @@ class NotificationManager:
 
         if not driver:
             return
-        try:
-            soc = int(text)
-            if 10 <= soc <= 100:
-                for vehicle in driver.vehicles:
-                    if vehicle in self.pending_inquiries:
-                        self._handle_soc_callback(chat_id, f"soc_{vehicle}_{soc}")
-                        return
-        except ValueError:
-            pass
+        soc = _parse_soc_text(text)
+        if soc is not None and 10 <= soc <= 100:
+            for vehicle in driver.vehicles:
+                if vehicle in self.pending_inquiries:
+                    self._handle_soc_callback(chat_id, f"soc_{vehicle}_{soc}")
+                    return
 
     def _handle_boost_command(self, chat_id: int, text: str, driver):
         """/boost [Fahrzeug] — activate Boost Charge for named (or default) vehicle."""

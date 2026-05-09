@@ -35,6 +35,7 @@ from explanation_generator import ExplanationGenerator
 from logging_util import log
 from state import Action, ManualSocStore, SystemState, calc_solar_surplus_kwh, filter_today_solar
 from state_store import StateStore
+from time_util import to_local, local_hour
 from version import VERSION
 
 from web.template_engine import render as render_template
@@ -926,7 +927,7 @@ class WebServer:
                 hour = start.replace(minute=0, second=0, microsecond=0)
                 if now - timedelta(hours=6) <= hour <= now + timedelta(hours=36):
                     prices.append({
-                        "hour": hour.astimezone().strftime("%H:%M"),
+                        "hour": to_local(hour).strftime("%H:%M"),
                         "hour_utc": hour.isoformat(),
                         "price_ct": round(val, 2),
                         "is_now": hour <= now < hour + timedelta(hours=1),
@@ -951,7 +952,7 @@ class WebServer:
                     else:
                         start = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
                     hour = start.replace(minute=0, second=0, microsecond=0)
-                    hour_key = hour.astimezone().strftime("%H:%M")
+                    hour_key = to_local(hour).strftime("%H:%M")
                     solar_by_hour[hour_key] = max(solar_by_hour.get(hour_key, 0), val)
                 except Exception:
                     continue
@@ -1146,8 +1147,8 @@ def _calculate_charge_slots(tariffs, cfg, last_state, vehicles, solar_forecast=N
         forecast_source = "evcc"
     else:
         pv_surplus_kw = max(0, pv_now_kw - home_now_kw)
-        local_hour = now.astimezone().hour if now.tzinfo else now.hour
-        pv_hours_remaining = max(0, 19 - max(local_hour, 7))
+        local_h = local_hour(now if now.tzinfo else now.replace(tzinfo=timezone.utc))
+        pv_hours_remaining = max(0, 19 - max(local_h, 7))
         pv_energy_forecast_kwh = pv_surplus_kw * 0.6 * pv_hours_remaining if pv_now_kw > 0.5 else 0
         forecast_source = "estimate"
 

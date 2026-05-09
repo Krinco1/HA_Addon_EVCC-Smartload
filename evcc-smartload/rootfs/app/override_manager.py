@@ -17,7 +17,7 @@ Design:
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from logging_util import log
@@ -57,7 +57,7 @@ class OverrideManager:
         Returns dict with ok, and on quiet-hours block: quiet_hours_blocked=True.
         Last-activated-wins: a new Boost replaces an existing one for any vehicle.
         """
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # Boost is an explicit user override — it must work even during quiet hours.
         # Quiet hours only suppress automatic multi-EV switching (ChargeSequencer);
@@ -139,7 +139,7 @@ class OverrideManager:
             if self._active is None:
                 return {"active": False}
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             remaining = max(0, (self._active.expires_at - now).total_seconds() / 60)
             return {
                 "active": True,

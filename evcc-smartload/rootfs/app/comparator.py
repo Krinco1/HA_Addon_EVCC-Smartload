@@ -20,6 +20,11 @@ from config import Config, COMPARISON_LOG_PATH, DEVICE_CONTROL_DB_PATH
 from logging_util import log
 from state import Action, SystemState
 
+# Cap in-memory comparison history (also matches the slice on persistence,
+# avoiding unbounded growth across long-running sessions).
+_MAX_COMPARISONS = 1000
+_MAX_RESIDUAL_COMPARISONS = 2000
+
 
 # =============================================================================
 # Comparator
@@ -157,6 +162,8 @@ class Comparator:
             "rl_simulated_cost": rl_sim_cost,
             "rl_better": rl_sim_cost <= actual_cost,
         })
+        if len(self.comparisons) > _MAX_COMPARISONS:
+            del self.comparisons[: len(self.comparisons) - _MAX_COMPARISONS]
 
         self.lp_total_cost += actual_cost
         self.rl_total_cost += rl_sim_cost
@@ -304,6 +311,8 @@ class Comparator:
             "delta_ev_ct": delta_ev_ct,
         }
         self._residual_comparisons.append(entry)
+        if len(self._residual_comparisons) > _MAX_RESIDUAL_COMPARISONS:
+            del self._residual_comparisons[: len(self._residual_comparisons) - _MAX_RESIDUAL_COMPARISONS]
         self.save()
 
     def get_recent_comparisons(self, days: int = 7) -> List[Dict]:

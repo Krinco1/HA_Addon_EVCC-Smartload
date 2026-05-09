@@ -10,6 +10,8 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from time_util import to_local
+
 
 class DecisionEntry:
     __slots__ = ("ts", "category", "icon", "text", "details", "source")
@@ -26,7 +28,7 @@ class DecisionEntry:
     def to_dict(self) -> dict:
         return {
             "ts": self.ts.isoformat(),
-            "ts_local": self.ts.astimezone().strftime("%H:%M:%S"),
+            "ts_local": to_local(self.ts).strftime("%H:%M:%S"),
             "category": self.category,
             "icon": self.icon,
             "text": self.text,
