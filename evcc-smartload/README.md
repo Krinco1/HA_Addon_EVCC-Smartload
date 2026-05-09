@@ -28,7 +28,7 @@
 | **evcc Lademodus-Steuerung** | SmartLoad setzt aktiv PV/Min+PV/Schnell je nach LP-Plan und Preis-Perzentilen |
 | **Override-Detection** | Manuelle evcc-Modus-Änderungen werden erkannt und respektiert bis Vorgang abgeschlossen |
 | **Battery Arbitrage** | LP-gated Batterie→EV Entladung mit 7-Gate Logik und Profitabilitätsprüfung |
-| **Vehicle SoC Polling** | Zuverlässige API-Provider (Kia, Renault) mit Backoff, evcc-Live-Suppression |
+| **Vehicle SoC Polling** | Renault Cloud-API mit Backoff + evcc-Live-Suppression; KIA/Hyundai/VW etc. via evcc.yaml |
 | **Poll Now Button** | Manueller SoC-Abruf pro Fahrzeug im Dashboard mit 5-Min Throttle |
 | **StateStore** | Thread-safe RLock, atomare Snapshots, SSE-Broadcast |
 | **SSE Live-Updates** | /events Endpoint, kein Polling, 30s Keepalive |
@@ -38,7 +38,7 @@
 | **Charge-Sequencer** | Koordiniert mehrere EVs an einer Wallbox mit Quiet Hours (21–06 Uhr) |
 | **Telegram-Notifications** | Fahrer werden direkt gefragt: "Auf wieviel % laden?" → Inline-Buttons |
 | **Solar-Integration** | PV-Prognose beeinflusst Lade-Aggressivität und Entladetiefe |
-| **Vehicle Providers** | KIA (ccapi), Renault (renault-api), evcc, Manual, Custom |
+| **Vehicle Providers** | Renault (renault-api), evcc (Standard für alle anderen Marken), Custom (lokales HTTP), Manual |
 | **Dashboard** | 4 Tabs (Status, Plan/Gantt, Fahrzeuge, Lernen) mit SVG-Charts und Live-SSE-Updates |
 
 ## Installation
@@ -86,16 +86,20 @@ Wird beim ersten Start unter `/config/vehicles.yaml` angelegt (Beispieldatei):
 
 ```yaml
 vehicles:
-  - name: KIA_EV9
-    type: kia
+  - name: my_Twingo
+    type: renault          # Cloud-Polling via renault-api
     username: "..."
     password: "..."
-    capacity_kwh: 99.8
-
-  - name: my_Twingo
-    type: evcc           # SoC direkt von evcc
     capacity_kwh: 22
+
+  - name: ora_03
+    type: evcc             # SoC ausschließlich via evcc state
+    capacity_kwh: 63
 ```
+
+> Der frühere `type: kia` wurde in v6.4 entfernt (Bluelink-Cloud unzuverlässig).
+> Stattdessen evcc.yaml mit `hyundai`/`kia`-Provider und `poll.mode: always`
+> konfigurieren; in vehicles.yaml dann `type: evcc`.
 
 ### drivers.yaml (optional)
 
@@ -107,11 +111,11 @@ telegram_bot_token: "123456:ABC-DEF..."
 
 drivers:
   - name: "Nico"
-    vehicles: ["KIA_EV9"]
+    vehicles: ["my_Twingo"]
     telegram_chat_id: 123456789    # /start im Bot, dann getUpdates
 
   - name: "Fahrer2"
-    vehicles: ["ora_03", "my_Twingo"]
+    vehicles: ["ora_03"]
     telegram_chat_id: 987654321
 ```
 
@@ -144,7 +148,7 @@ drivers:
 | GET | `/history` | Plan-vs-Ist Vergleichsdaten |
 | GET | `/docs` | Eingebaute Dokumentation (HTML) |
 | GET | `/docs/api` | API-Referenz (HTML) |
-| POST | `/vehicles/manual-soc` | Manuellen SoC setzen `{"vehicle":"KIA_EV9","soc":45}` |
+| POST | `/vehicles/manual-soc` | Manuellen SoC setzen `{"vehicle":"my_Twingo","soc":45}` |
 | POST | `/vehicles/refresh` | **v6.1** Poll Now — sofortiger SoC-Abruf (5 Min Throttle) |
 | POST | `/sequencer/request` | Lade-Anfrage stellen `{"vehicle":"...","target_soc":80}` |
 | POST | `/sequencer/cancel` | Lade-Anfrage abbrechen `{"vehicle":"..."}` |
@@ -193,7 +197,7 @@ Die **BatteryArbitrage** prüft über 7 Gates ob Batterie→EV-Entladung wirtsch
 - **Manuelle evcc-Overrides** werden respektiert — SmartLoad kämpft nicht gegen den Nutzer
 - **HorizonPlanner ist primärer Optimizer (LP)**; HolisticOptimizer nur automatischer Fallback bei LP-Fehler
 - **Forecaster brauchen 24h Daten** bevor sie bereit sind (is_ready Gate) — davor läuft LP ohne Prognose
-- **Vehicle Providers**: Kia/Renault-API mit automatischem Backoff, evcc-Live-SoC hat Vorrang bei Wallbox-Verbindung
+- **Vehicle Providers**: Renault-API mit automatischem Backoff, evcc-Live-SoC hat Vorrang bei Wallbox-Verbindung. KIA/Hyundai/VW etc. via evcc.yaml `poll.mode: always`
 - **Quiet Hours**: Zwischen 21:00–06:00 kein automatisches EV-Umstecken
 - **Telegram**: Direkte Bot API, kein HA Automation/Webhook nötig
 - **drivers.yaml optional**: Ohne Datei volles Bestandsverhalten

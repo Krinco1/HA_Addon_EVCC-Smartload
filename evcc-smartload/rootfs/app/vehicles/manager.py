@@ -10,7 +10,6 @@ from typing import Dict, List, Optional
 from logging_util import log
 from vehicles.base import VehicleData
 from vehicles.evcc_provider import EvccProvider
-from vehicles.kia_provider import KiaProvider
 from vehicles.renault_provider import RenaultProvider
 from vehicles.custom_provider import CustomProvider
 
@@ -19,14 +18,18 @@ def _make_provider(config: dict):
     """Factory: create provider based on config type."""
     ptype = config.get("type", config.get("template", "evcc")).lower()
 
-    if ptype in ("kia", "hyundai", "genesis"):
-        return KiaProvider(config)
-    elif ptype == "renault":
+    if ptype == "renault":
         return RenaultProvider(config)
     elif ptype == "custom":
         return CustomProvider(config)
     elif ptype in ("evcc", "manual"):
         # "manual" = SoC via dashboard manual input or evcc wallbox only
+        return EvccProvider(config)
+    elif ptype in ("kia", "hyundai", "genesis"):
+        log("warning",
+            f"Provider type '{ptype}' is no longer supported (Bluelink cloud was unreliable). "
+            f"Vehicle '{config.get('name', '?')}' falls back to evcc-only — "
+            f"configure SoC via evcc.yaml with poll.mode: always.")
         return EvccProvider(config)
     else:
         log("warning", f"Unknown provider type '{ptype}' for {config.get('name', '?')} — using evcc fallback")

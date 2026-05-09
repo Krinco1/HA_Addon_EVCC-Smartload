@@ -2,6 +2,48 @@
 
 ---
 
+## v6.4.0 — KIA-Provider entfernt + Architektur-Audit (2026-05-09)
+
+**KIA / Hyundai / Genesis Cloud-Polling final entfernt** — Bluelink-Cloud war über
+alle Versionen unzuverlässig (Rate-Limit 5091, häufige Auth-Refresh-Fehler,
+Library-Fragilität). User-Realität: Kia-Provider lieferte nie produktiv SoC.
+
+### Entfernt
+
+- `vehicles/kia_provider.py` (148 LoC) — komplett gelöscht.
+- `hyundai-kia-connect-api>=3.44,<4` Python-Dependency aus Dockerfile.
+- `vehicles.yaml.example` KIA-Block entfernt; `type: renault` als primäres Cloud-
+  Polling-Beispiel; `type: evcc` als Default-Empfehlung für KIA/Hyundai/VW etc.
+- README, DOCS, Test-Fixtures, Notification-Doc-Strings, Dashboard-API-Beispiele
+  bereinigt.
+
+### Migrations-Pfad für KIA-User
+
+In `evcc.yaml` einen `kia`/`hyundai`-Provider mit `poll.mode: always` und
+`interval: 5m` konfigurieren. In `vehicles.yaml` dann `type: evcc` setzen.
+SmartLoad liest SoC dann via evcc Loadpoint-State (siehe DOCS.md).
+
+### Verbleibende Provider
+
+- **Renault** (`type: renault`) — einziges aktives Cloud-Polling, gehärtet in v6.3.2.
+- **Custom** (`type: custom`) — lokales HTTP für ORA/eigene Endpoints.
+- **evcc** (`type: evcc`) — passive Lesemaske für alle anderen Fahrzeuge.
+
+### Architektur-Audit
+
+Begleitend `.planning/ARCHITECTURE-ANALYSIS-2026-05-09.md` und
+`.planning/REVIEW-FULL-2026-05-09.md` erzeugt — Roadmap für v2.0:
+main.py-Refactor, Multi-LP-Strategie, Component-Health-Banner,
+actual_cost echt berechnen, Notification-Cooldown.
+
+### Backwards-Compat
+
+`type: kia/hyundai/genesis` in vehicles.yaml fällt mit Warnung auf EvccProvider
+zurück, statt zu crashen. Bestehende Configs bleiben funktional, aktivieren
+aber kein eigenes Cloud-Polling mehr.
+
+---
+
 ## v6.3.2 — Boost & Twingo Hotfix (2026-04-16)
 
 **Zwei vom User gemeldete Folge-Regressionen aus v6.3.1.**

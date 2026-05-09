@@ -1071,9 +1071,9 @@ pre{{background:#0f3460;padding:15px;border-radius:6px;}}code{{color:#00ff88;}}
 <pre><code>{{"vehicle": "ORA_03", "soc": 45}}</code></pre></div>
 <div class="ep"><span class="m post">POST</span> <span class="path">/sequencer/request</span>
 <p>v5: Manuell Ladewunsch eintragen</p>
-<pre><code>{{"vehicle": "KIA_EV9", "target_soc": 80}}</code></pre></div>
+<pre><code>{{"vehicle": "my_Twingo", "target_soc": 80}}</code></pre></div>
 <div class="ep"><span class="m post">POST</span> <span class="path">/sequencer/cancel</span>
-<pre><code>{{"vehicle": "KIA_EV9"}}</code></pre></div>
+<pre><code>{{"vehicle": "my_Twingo"}}</code></pre></div>
 <div class="ep"><span class="m post">POST</span> <span class="path">/rl-override</span>
 <pre><code>{{"device": "battery", "mode": "manual_lp"}}</code></pre></div>
 <p style="text-align:center;margin-top:50px;"><a href="/docs" style="color:#00d4ff;">← Dokumentation</a></p>

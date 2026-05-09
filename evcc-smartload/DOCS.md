@@ -68,27 +68,26 @@ Beim ersten Start wird eine Beispieldatei erzeugt.
 
 ```yaml
 vehicles:
-  - name: KIA_EV9
-    type: kia
-    username: "user@email.com"
-    password: "geheim"
-    pin: "1234"
-    region: 2        # 1=EU, 2=DE, 3=US
-    brand: kia       # kia, hyundai, genesis
-    capacity_kwh: 99.8
-    poll_interval_min: 60
-
-  - name: my_Twingo
+  - name: my_Twingo            # Renault/Dacia via Cloud-API (renault-api)
     type: renault
     username: "user@email.com"
     password: "geheim"
     locale: "de_DE"
     capacity_kwh: 22
+    poll_interval_min: 60
 
-  - name: ora_03
+  - name: ora_03               # SoC nur via evcc (Wallbox-Live oder evcc.yaml poll.mode)
     type: evcc
     capacity_kwh: 63
+
+  # type: custom für lokale HTTP-Endpoints (z.B. ORA via LAN)
+  # type: kia entfällt seit v6.4 — bitte evcc.yaml mit hyundai-Provider nutzen
 ```
+
+> **KIA / Hyundai / Genesis (Bluelink)** — der eigene `type: kia` Provider wurde
+> in v6.4 entfernt (Bluelink-Cloud zu unzuverlässig). Empfohlen:
+> in `evcc.yaml` einen `kia`/`hyundai`-Provider mit `poll.mode: always` und
+> `interval: 5m` konfigurieren, in `vehicles.yaml` dann `type: evcc`.
 
 ## Telegram-Notifications (drivers.yaml, optional)
 
@@ -99,7 +98,7 @@ telegram_bot_token: "123456:ABC-DEF..."
 
 drivers:
   - name: "Nico"
-    vehicles: ["KIA_EV9"]
+    vehicles: ["my_Twingo"]
     telegram_chat_id: 123456789
 ```
 

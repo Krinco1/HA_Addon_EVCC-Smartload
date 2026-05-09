@@ -4,39 +4,32 @@
 # Diese Datei konfiguriert den direkten API-Zugriff auf deine Fahrzeuge.
 # Ohne diese Datei werden SoC-Werte nur bei verbundenen Fahrzeugen (via evcc) gelesen.
 #
-# Beispiel-Konfigurationen für alle unterstützten Fahrzeugtypen:
+# Empfohlener Default: SoC primär über evcc holen (`type: evcc`).
+# Eigenes Cloud-Polling nur dort, wo evcc keine Daten liefert (z.B. Renault/Dacia).
+#
+# Beispiel-Konfigurationen:
 
 vehicles:
 
   # ─────────────────────────────────────────────────────────────────────────
-  # KIA / Hyundai / Genesis (via hyundai-kia-connect-api)
-  # ─────────────────────────────────────────────────────────────────────────
-  - name: KIA_EV9
-    type: kia
-    username: "deine@email.de"
-    password: "deinPasswort"
-    pin: "1234"               # optional, je nach Region nötig
-    region: 1                 # 1=Europa, 2=Kanada, 3=USA
-    brand: 1                  # 1=KIA, 2=Hyundai, 3=Genesis
-    # vin: "KNDC..."          # optional, wird auto-erkannt wenn nur 1 Fahrzeug
-    capacity_kwh: 99.8
-    charge_power_kw: 11       # Wallbox-Ladeleistung in kW
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # Renault / Dacia (via renault-api)
+  # Renault / Dacia (via renault-api) — z.B. Twingo, Zoe, Spring
+  # Aktuell der einzige zuverlässige Cloud-Provider in SmartLoad.
   # ─────────────────────────────────────────────────────────────────────────
   - name: my_Twingo
     type: renault
     username: "deine@email.de"
     password: "deinPasswort"
-    # vin: "VF1ABC..."        # optional
+    # vin: "VF1ABC..."        # optional, wird auto-erkannt wenn nur 1 Fahrzeug
     locale: "de_DE"           # optional
     capacity_kwh: 22
     charge_power_kw: 7.4
 
   # ─────────────────────────────────────────────────────────────────────────
-  # evcc-only (SoC nur wenn Fahrzeug an Wallbox angesteckt)
-  # Für Fahrzeuge ohne Cloud-API (z.B. GWM/ORA wenn evcc SoC liefert)
+  # evcc-only (SoC nur wenn Fahrzeug an Wallbox angesteckt ODER
+  # via evcc.yaml `poll.mode: always` konfiguriert)
+  # Für Fahrzeuge ohne SmartLoad-eigenen Cloud-Provider:
+  #   - GWM/ORA, Tesla, BMW, VW etc. → evcc als Datenquelle
+  #   - KIA/Hyundai/Genesis (Bluelink) → evcc nutzen, evcc.yaml mit hyundai-Provider
   # ─────────────────────────────────────────────────────────────────────────
   - name: ora_03
     type: evcc
@@ -44,7 +37,8 @@ vehicles:
     charge_power_kw: 6.6
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Custom HTTP-Endpoint (beliebige API)
+  # Custom HTTP-Endpoint (z.B. ORA via lokales LAN-API)
+  # Nur lokale, vertrauenswürdige Endpoints — kein TLS-Cert-Validation.
   # ─────────────────────────────────────────────────────────────────────────
   # - name: mein_auto
   #   type: custom
@@ -53,3 +47,10 @@ vehicles:
   #   # soc_regex: '"soc":\s*(\d+)' # alternativ: Regex
   #   capacity_kwh: 60
   #   charge_power_kw: 11
+
+# Hinweis zu KIA / Hyundai / Genesis:
+# Der frühere `type: kia` wurde in v6.4 entfernt — die Bluelink-Cloud war über
+# alle Versionen unzuverlässig (Rate-Limit 5091, häufige Auth-Refresh-Fehler).
+# Empfohlene Alternative: in evcc.yaml einen `kia`/`hyundai`-Provider mit
+# `poll.mode: always` und `interval: 5m` konfigurieren; in vehicles.yaml dann
+# `type: evcc` verwenden. SmartLoad liest den SoC dann via evcc state.

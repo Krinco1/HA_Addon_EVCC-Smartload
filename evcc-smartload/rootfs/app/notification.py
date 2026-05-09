@@ -357,7 +357,7 @@ class NotificationManager:
     # ------------------------------------------------------------------
 
     def _handle_soc_callback(self, chat_id: int, callback_data: str):
-        """Process button reply: soc_KIA_EV9_80 or soc_KIA_EV9_skip."""
+        """Process button reply: soc_my_Twingo_80 or soc_my_Twingo_skip."""
         parts = callback_data.split("_")
         if len(parts) < 3:
             return
@@ -390,7 +390,7 @@ class NotificationManager:
         """Phase 7-02: Process departure inline button.
 
         Callback format: "depart_{safe_vehicle}_{time_str}"
-        Example: "depart_KIA_EV9_4h" → vehicle "KIA EV9", time "4h"
+        Example: "depart_my_Twingo_4h" → vehicle "my Twingo", time "4h"
         """
         # Strip "depart_" prefix, then split on last "_" to get time_str
         rest = callback_data[len("depart_"):]
@@ -430,7 +430,7 @@ class NotificationManager:
         log("info", f"Telegram: departure set for {vehicle_name} -> {departure.isoformat()}")
 
     def _handle_boost_callback(self, chat_id: int, callback_data: str):
-        """Process Boost inline button: boost_KIA_EV9 → activate for 'KIA EV9'."""
+        """Process Boost inline button: boost_my_Twingo → activate for 'my Twingo'."""
         # Strip "boost_" prefix, replace underscores back to spaces
         vehicle_key = callback_data[len("boost_"):]
         vehicle_name = vehicle_key.replace("_", " ")
@@ -515,7 +515,7 @@ class NotificationManager:
             self.bot.send_message(chat_id, "Boost Charge nicht verfügbar.")
             return
 
-        # Parse vehicle name from command: "/boost KIA EV9" → "KIA EV9"
+        # Parse vehicle name from command: "/boost my Twingo" → "my Twingo"
         parts = text.strip().split(None, 1)
         vehicle_name = parts[1].strip() if len(parts) > 1 else ""
 
@@ -526,7 +526,7 @@ class NotificationManager:
         if not vehicle_name:
             self.bot.send_message(
                 chat_id,
-                "Bitte Fahrzeug angeben: /boost KIA EV9\nOder nutze den Inline-Button."
+                "Bitte Fahrzeug angeben: /boost my Twingo\nOder nutze den Inline-Button."
             )
             return
 

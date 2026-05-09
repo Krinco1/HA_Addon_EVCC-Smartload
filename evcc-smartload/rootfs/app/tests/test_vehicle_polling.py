@@ -13,7 +13,7 @@ from vehicles.manager import VehicleManager
 
 def _make_manager_with_mock(name="testcar", soc_result=75.0, range_result=200.0):
     """Create VehicleManager with a mock pollable provider."""
-    cfg = {"evcc_name": name, "type": "kia", "capacity_kwh": 64, "charge_power_kw": 11}
+    cfg = {"evcc_name": name, "type": "renault", "capacity_kwh": 64, "charge_power_kw": 11}
     mgr = VehicleManager([cfg])
 
     # Replace provider with mock

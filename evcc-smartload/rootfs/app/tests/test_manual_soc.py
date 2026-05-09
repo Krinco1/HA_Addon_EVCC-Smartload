@@ -63,7 +63,7 @@ def test_set_get_timestamp_roundtrip(tmp_path):
 def test_manual_soc_survives_poll(tmp_path):
     """Test 4: manual_soc survives poll_vehicle() (merge fix regression test)."""
     from vehicles.manager import VehicleManager
-    cfg = {"evcc_name": "kona", "type": "kia", "capacity_kwh": 64, "charge_power_kw": 11}
+    cfg = {"evcc_name": "kona", "type": "renault", "capacity_kwh": 64, "charge_power_kw": 11}
     mgr = VehicleManager([cfg])
 
     mock_provider = MagicMock()
