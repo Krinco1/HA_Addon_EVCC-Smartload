@@ -729,7 +729,9 @@ class WebServer:
         }
 
     def _rl_maturity(self, comp: dict) -> dict:
-        n = comp.get("comparisons", 0)
+        # n must come from residual_samples (real plan-vs-actual comparisons)
+        # not from comparisons (legacy action-pair trace, fixed at 1000).
+        n = comp.get("residual_samples", 0)
         wr = comp.get("win_rate", 0)
         ready = comp.get("rl_ready", False)
         mn = self.cfg.rl_ready_min_comparisons

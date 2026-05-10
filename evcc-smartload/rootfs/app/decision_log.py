@@ -189,12 +189,14 @@ def log_main_cycle(
         if lp_action.ev_limit_eur is not None:
             dlog.action(f"LP → EV-Limit: {lp_action.ev_limit_eur * 100:.1f}ct", source="controller")
 
-    # RL status
+    # RL status — Win-Rate is computed from residual cost samples (real plan
+    # vs actual), not from the legacy action-pair list. Mixing the two produces
+    # nonsense like "1000 Vergleiche, 1% Win-Rate" (because 1000 ≠ residual N).
     try:
-        n_comps = len(comparator.comparisons)
-        win_pct = (comparator.rl_wins / max(1, n_comps)) * 100
+        n_residual = len(comparator._residual_comparisons)
+        win_pct = (comparator.rl_wins / max(1, n_residual)) * 100
         label = "aktiv" if comparator.rl_ready else "Schatten-Modus"
-        dlog.rl(f"RL {label} (Win-Rate: {win_pct:.0f}%, {n_comps} Vergleiche)", source="rl")
+        dlog.rl(f"RL {label} (Win-Rate: {win_pct:.0f}%, {n_residual} Residual-Vergleiche)", source="rl")
 
         if rl_action and lp_action:
             if rl_action.battery_action != lp_action.battery_action:

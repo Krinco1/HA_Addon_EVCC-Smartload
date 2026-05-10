@@ -2,6 +2,39 @@
 
 ---
 
+## v6.6.7 — RL-Maturity ehrlich + Backfill-Tool aus HA-Historie (2026-05-10)
+
+**Display-Fix (A)**: Dashboard zeigte "1000 Vergleiche, 1% Win-Rate" — die zwei
+Zahlen waren aus unterschiedlichen Quellen (Legacy Action-Pair-Trace vs.
+Residual-Samples), gemischt zu einer irreführenden Anzeige. Jetzt:
+
+- `decision_log.py`: Win-Rate wird gegen `len(_residual_comparisons)` gerechnet
+  (ehrliche Basis), Anzeige `"… Residual-Vergleiche"` statt `"… Vergleiche"`.
+- `_rl_maturity` in `web/server.py`: `n` kommt aus `residual_samples`,
+  nicht aus dem statischen `comparisons`-Trace.
+
+**Backfill-Tool (B)**: Neues `tools/backfill_residuals.py` liest HA-Recorder-
+Historie (Tariff + Grid-Power) und generiert ehrliche Residual-Samples für die
+Comparator-Statistik. Konzept:
+- Pro Stunde: `actual_cost = grid_kwh × tariff_dieser_Stunde`
+- `plan_cost = grid_kwh × median_tariff_im_Fenster` (idealer-LP-Baseline)
+- `rl_better = actual < plan` → "wurde unter Median gekauft?"
+
+Samples sind mit `source: "backfill"` getaggt, idempotent (Re-Run ersetzt alte
+Backfill-Einträge), löscht keine live-Samples. **Ist KEIN RL-Training** —
+trainiert kein neuronales Netz, gibt nur dem Comparator eine ehrliche
+Datenbasis statt nur den ~50 Live-Slots der letzten Tage.
+
+Usage:
+```
+HA_URL=http://supervisor/core HA_TOKEN=$SUPERVISOR_TOKEN \\
+    python3 /app/tools/backfill_residuals.py --days 30 --apply
+```
+
+6 neue Tests in `test_backfill_residuals.py`. **156/156 grün.**
+
+---
+
 ## v6.6.6 — RenaultProvider akzeptiert evcc-Style `user:` + do_POST JSON-Guard (2026-05-09)
 
 **Bug 1**: `RenaultProvider` las nur `username:` aus der vehicles.yaml. evcc-Style
