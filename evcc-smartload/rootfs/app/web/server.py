@@ -372,13 +372,15 @@ class WebServer:
 
                 elif path == "/comparator/backfill":
                     # v6.6.8: trigger residual-sample backfill from HA history.
-                    # Uses SUPERVISOR_TOKEN from env. Body: {"days": 30, "apply": true}
+                    # Body: {"days": 30, "apply": true, "ha_url": "...", "ha_token": "..."}
+                    # ha_url / ha_token in body override env (falls Supervisor-Token
+                    # nicht im Container-Env injiziert wurde).
                     days = int(body.get("days", 30))
                     apply = bool(body.get("apply", False))
                     try:
                         import os as _os
-                        ha_url = _os.environ.get("HA_URL", "http://supervisor/core")
-                        ha_token = _os.environ.get("HA_TOKEN") or _os.environ.get("SUPERVISOR_TOKEN", "")
+                        ha_url = body.get("ha_url") or _os.environ.get("HA_URL") or "http://homeassistant.local:8123"
+                        ha_token = body.get("ha_token") or _os.environ.get("HA_TOKEN") or _os.environ.get("SUPERVISOR_TOKEN", "")
                         if not ha_token:
                             self._json({"error": "SUPERVISOR_TOKEN not set in container env"}, 500)
                             return
