@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bashio
+# v6.6.11: proper s6 service so SUPERVISOR_TOKEN + other supervisor env reaches
+# the python process. Direct CMD in Dockerfile bypassed with-contenv.
+cd /app
+exec python3 -u /app/main.py
