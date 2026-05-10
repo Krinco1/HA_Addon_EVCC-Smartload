@@ -366,6 +366,51 @@ class WebServer:
                     except Exception as e:
                         self._json({"error": str(e)}, 500)
 
+                elif path == "/comparator/backfill":
+                    # v6.6.8: trigger residual-sample backfill from HA history.
+                    # Uses SUPERVISOR_TOKEN from env. Body: {"days": 30, "apply": true}
+                    days = int(body.get("days", 30))
+                    apply = bool(body.get("apply", False))
+                    try:
+                        import os as _os
+                        ha_url = _os.environ.get("HA_URL", "http://supervisor/core")
+                        ha_token = _os.environ.get("HA_TOKEN") or _os.environ.get("SUPERVISOR_TOKEN", "")
+                        if not ha_token:
+                            self._json({"error": "SUPERVISOR_TOKEN not set in container env"}, 500)
+                            return
+                        from tools.backfill_residuals import (
+                            DEFAULT_SENSORS, build_residual_samples,
+                            fetch_history, merge_into_comparator, resample_hourly,
+                        )
+                        from config import COMPARISON_LOG_PATH
+                        series = {}
+                        fetch_errors = {}
+                        for key, entity_id in DEFAULT_SENSORS.items():
+                            try:
+                                rows = fetch_history(ha_url, ha_token, entity_id, days)
+                                series[key] = resample_hourly(rows)
+                            except Exception as e:
+                                fetch_errors[entity_id] = str(e)
+                                series[key] = {}
+                        samples = build_residual_samples(
+                            series.get("grid_w", {}), series.get("tariff", {}))
+                        result = {
+                            "days": days, "apply": apply,
+                            "fetch_errors": fetch_errors,
+                            "candidate_samples": len(samples),
+                            "wins_in_candidates": sum(1 for s in samples if s["rl_better"]),
+                        }
+                        if apply and samples:
+                            summary = merge_into_comparator(samples, COMPARISON_LOG_PATH)
+                            result["written"] = summary
+                            result["restart_required"] = True
+                            log("info", f"Backfill applied: {summary}")
+                        self._json(result)
+                    except Exception as e:
+                        import traceback
+                        log("error", f"Backfill error: {e}\n{traceback.format_exc()}")
+                        self._json({"error": str(e)}, 500)
+
                 elif path == "/vehicles/disable":
                     # v6.6.4: set ``disabled: true`` on the vehicle's config —
                     # non-destructive, can be reverted by editing the yaml.

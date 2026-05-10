@@ -2,6 +2,18 @@
 
 ---
 
+## v6.6.8 — POST /comparator/backfill REST-Endpoint (2026-05-10)
+
+Wrappt das `tools/backfill_residuals.py`-Tool als REST-Endpoint, damit der
+Backfill ohne SSH/docker-exec triggerbar ist (insbesondere für MCP-Workflows
+und HA-Automations). Body: `{"days": 30, "apply": true}`. Nutzt den
+`SUPERVISOR_TOKEN` aus dem Container-Env automatisch.
+
+DRY-RUN-Default (`apply: false`) gibt nur `candidate_samples` und
+`wins_in_candidates` zurück, schreibt nichts.
+
+---
+
 ## v6.6.7 — RL-Maturity ehrlich + Backfill-Tool aus HA-Historie (2026-05-10)
 
 **Display-Fix (A)**: Dashboard zeigte "1000 Vergleiche, 1% Win-Rate" — die zwei
