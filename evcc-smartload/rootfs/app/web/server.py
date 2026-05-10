@@ -194,6 +194,10 @@ class WebServer:
                         "components": health_records,
                         "components_failed_count": n_failed,
                     })
+                elif path == "/debug/env":
+                    # v6.6.10: temporary diag — list env-var KEYS only (no values)
+                    import os as _os
+                    self._json({"env_keys": sorted(_os.environ.keys())})
                 elif path == "/status":
                     self._json(srv._api_status())
                 elif path == "/slots":
