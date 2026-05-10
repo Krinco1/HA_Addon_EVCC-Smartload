@@ -2,6 +2,23 @@
 
 ---
 
+## v6.6.9 — `homeassistant_api: true` für SUPERVISOR_TOKEN (2026-05-10)
+
+`POST /comparator/backfill` (v6.6.8) failed mit `SUPERVISOR_TOKEN not set in
+container env`, weil das Add-on bisher keine HA-API-Permission deklariert hatte.
+
+Fix: `homeassistant_api: true` in `config.yaml` ergänzt — damit injiziert
+Supervisor `SUPERVISOR_TOKEN` ins Container-Env. Dadurch kann der Backfill-
+Endpoint die HA-Recorder-Historie ohne manuell konfigurierten Long-Lived-Token
+lesen.
+
+**Diagnose-Notiz** (für zukünftige Sessions): `curl POST` aus PowerShell auf
+`homeassistant.local:8099` resolvte standardmäßig auf IPv6 (`fe80::...`), das
+Add-on bindet aber nur IPv4 → "Connection was reset" / "Empty reply". Workaround
+auf Client-Seite: `curl -4` oder `Invoke-RestMethod` mit IP statt Hostname.
+
+---
+
 ## v6.6.8 — POST /comparator/backfill REST-Endpoint (2026-05-10)
 
 Wrappt das `tools/backfill_residuals.py`-Tool als REST-Endpoint, damit der
